@@ -47,7 +47,10 @@ echo "==> 安装菜单项与图标"
 install -d -m 755 "$R/usr/share/applications"
 install -m 644 "$DATA/wps-clip-bridge.desktop" "$R/usr/share/applications/"
 install -d -m 755 "$R/usr/share/icons/hicolor/scalable/apps"
-install -m 644 "$DATA/wps-clip-bridge.svg" "$R/usr/share/icons/hicolor/scalable/apps/"
+install -m 644 "$DATA/wps-file.svg" "$R/usr/share/icons/hicolor/scalable/apps/"
+# 光栅回退图标（部分桌面环境不渲染 SVG）
+install -d -m 755 "$R/usr/share/icons/hicolor/256x256/apps"
+install -m 644 "$DATA/wps-file.png" "$R/usr/share/icons/hicolor/256x256/apps/"
 
 echo "==> 安装开机自启项"
 install -d -m 755 "$R/etc/xdg/autostart"

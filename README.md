@@ -237,7 +237,7 @@ wps-clip-bridge/
 /usr/bin/wps-clip-bridge-daemon      后台守护（自启的就是它）
 /usr/lib/python3/dist-packages/wpsclip/
 /usr/share/applications/wps-clip-bridge.desktop
-/usr/share/icons/hicolor/scalable/apps/wps-clip-bridge.svg
+/usr/share/icons/hicolor/scalable/apps/wps-file.svg
 /usr/share/man/man1/wps-copy.1.gz
 /etc/xdg/autostart/wps-clip-bridge.desktop
 ```
