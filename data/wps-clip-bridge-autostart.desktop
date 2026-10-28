@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=WPS 剪贴板服务
+Name[en]=WPS Clipboard Bridge
+Comment=后台服务：让 WPS 文档能正常复制到桌面和微信
+Comment[en]=Background service that fixes file copy from WPS
+Exec=/usr/bin/wps-clip-bridge-daemon
+Icon=wps-clip-bridge
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=2

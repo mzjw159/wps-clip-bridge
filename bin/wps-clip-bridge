@@ -1,0 +1,10 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""常驻剪贴板服务。"""
+import sys
+
+from wpsclip.bridge import main
+
+
+if __name__ == '__main__':
+    sys.exit(main())

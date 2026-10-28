@@ -1,0 +1,315 @@
+# wps-clip-bridge
+
+让 WPS for Linux 里的文档能正常复制、粘贴到桌面和微信。
+
+---
+
+## 它解决什么问题
+
+在 Windows 上，WPS 文档列表里右键「复制」，然后去桌面或微信按 `Ctrl+V`，文件就过去了。
+在银河麒麟（UKUI / Wayland 会话）上，同一个按钮点下去，到哪儿粘贴都是灰的。
+
+原因不是配置问题，是 WPS 那个按钮在 Linux 版里**没有实现**：
+
+```
+CLIPBOARD 持有者：Qt Selection Owner for wpsoffice
+对外声明的格式：  TARGETS / MULTIPLE / TIMESTAMP / SAVE_TARGETS
+逐格式盲请求 12 种（text/uri-list、x-special/*、UTF8_STRING…）：全部为空
+扫描 X 服务器 1~14000 号原子，找 WPS 私有通道：无
+```
+
+也就是说它只「占住」了剪贴板，一个字节的文件数据都没写进去，也没有藏到别的地方。
+数据从未离开 WPS 进程，外部做格式转换、做中转都无从下手 —— 这是死路。
+
+所以本工具**绕开那个按钮**：直接读取 WPS 自己的最近文档记录，把文件作为真正的
+文件对象放进剪贴板。桌面、微信、邮件客户端都能直接粘贴。
+
+（顺带它也修另一类问题：某些文件管理器/代理复制文件时漏写 `text/uri-list`，
+或者把 `copy` 头行写进了 `text/uri-list`，导致桌面端解析失败、粘贴变灰。）
+
+---
+
+## 安装
+
+```sh
+sudo apt install ./dist/wps-clip-bridge_1.0.0_all.deb
+```
+
+用 `apt` 而不是 `dpkg -i`，这样会自动补齐依赖（主要是 `python3-xlib`）。
+也可以直接在文件管理器里双击，用麒麟软件中心安装。
+
+装完 **不需要重启电脑**，执行一次即可开始使用：
+
+```sh
+wps-copy --start
+```
+
+（后台服务同时设为登录自启，以后开机会自动运行。）
+
+### 如果你是之前手工部署过的
+
+先跑一次迁移，清掉旧的自启项和残留进程，避免两套程序抢剪贴板和热键：
+
+```sh
+wps-copy --migrate
+```
+
+---
+
+## 使用
+
+三个入口，按习惯挑一个。
+
+### 1. 全局热键（最快）
+
+按 `Ctrl+Alt+C` → 弹出最近文档列表 → **双击**要的那一行 → 切到桌面或微信按 `Ctrl+V`。
+
+窗口卡在后台时再按一次热键，会把已有窗口提到前面，不会重复开。
+
+### 2. 图形窗口
+
+应用菜单 →「WPS 最近文档复制」，或：
+
+```sh
+wps-copy --gui
+```
+
+窗口里有搜索框、刷新、以及 **「浏览本地文件…」**（支持多选）——
+列表里没有的文件（比如从没在 WPS 里打开过的）可以直接选。
+
+### 3. 命令行
+
+```sh
+wps-copy                # 复制最近修改的第 1 个
+wps-copy --list         # 看清单和序号
+wps-copy 3              # 复制第 3 个
+wps-copy 报告            # 复制文件名含「报告」的
+wps-copy -f a.pdf b.doc # 直接指定文件，可多个
+```
+
+其它：
+
+```sh
+wps-copy --start        # 启动后台服务
+wps-copy --stop         # 停止后台服务
+wps-copy --status       # 看服务 / 热键 / 窗口的状态
+wps-copy --migrate      # 清理旧的手工部署
+```
+
+### 关于云文档
+
+WPS 云文档在本地通常留有一份缓存副本，这些也会出现在列表里，类型列标记为「云」。
+纯在线的、本地没有任何落盘文件的文档无法复制 —— 没有文件对象就没有可粘贴的东西。
+
+---
+
+## 配置
+
+配置文件在 `~/.config/wps-clip-bridge/config.ini`，不存在就是全用默认值。
+想要自定义就先手动建一个：
+
+```ini
+[hotkey]
+enabled = true
+combo = <Control><Alt>c      ; 也接受 Ctrl+Alt+C 这种写法
+
+[bridge]
+poll = 0.3                   ; 剪贴板轮询间隔（秒）
+
+[ui]
+limit = 80                   ; 列表最多显示多少条
+```
+
+改完热键要重启服务：`wps-copy --stop && wps-copy --start`。
+
+---
+
+## 卸载
+
+```sh
+sudo apt remove wps-clip-bridge
+```
+
+`/etc/xdg/autostart` 里的自启项、`/usr/share` 下的文件随包一起删除。
+你改过的配置和日志不会自动删，需要彻底清理就手动删这两个目录：
+
+```sh
+rm -rf ~/.config/wps-clip-bridge ~/.local/state/wps-clip-bridge
+```
+
+---
+
+## 从源码构建
+
+```sh
+cd ~/coding/wps-clip-bridge
+./build.sh              # 输出到本项目 dist/
+./build.sh --check      # 额外打印包内容并校验 desktop 文件语法
+
+OUT=/tmp/out ./build.sh # 换个输出目录
+```
+
+只依赖 `dpkg-deb` 和 `gzip`，不需要 `debhelper` / `fakeroot`（用 `--root-owner-group`）。
+
+---
+
+## 开发
+
+### 不装包，直接从源码跑
+
+所有模块都能 `-m` 运行，把 `src/` 加进 `PYTHONPATH` 即可：
+
+```sh
+cd ~/coding/wps-clip-bridge
+export PYTHONPATH=$PWD/src
+
+python3 -m wpsclip.recent        # 只做一件事：打印解析出的最近文档列表
+python3 -m wpsclip.cli --list    # 命令行清单
+python3 -m wpsclip.gui           # 图形窗口
+python3 -m wpsclip.bridge        # 剪贴板服务（前台跑，日志直接看）
+python3 -m wpsclip.daemon        # 看护进程（依次拉起 bridge + hotkey）
+```
+
+依赖：`python3-xlib`（X11 selection）、`python3-gi` + GTK3（图形窗口）。
+代码兼容 Python 3.8+（麒麟 V10 自带 3.8）。
+
+### 一个必须知道的开发坑
+
+`src/wpsclip/service.py` 的 `exe_for()` **优先使用 `/usr/bin/` 下已安装的入口**，
+找不到才退回 `python -m`。也就是说：
+
+> 只要系统里装过 1.0.0 的 deb，源码树里改的 `cli` / `gui` 会生效（由你直接执行），
+> 但 `ensure_bridge()` 拉起的**后台服务仍然是 `/usr/bin/wps-clip-bridge`**（安装的那份）。
+
+所以改 `bridge.py` / `hotkey.py` / `daemon.py` 时要二选一：
+
+```sh
+wps-copy --stop                                  # 先停掉已安装的后台
+PYTHONPATH=$PWD/src python3 -m wpsclip.bridge    # 前台跑改动过的服务
+```
+
+或者改完直接重装：`sudo apt install --reinstall ./dist/wps-clip-bridge_*.deb`。
+
+### 关键调试入口
+
+```sh
+python3 -m wpsclip.recent      # 确认 Office.conf 解析对不对（最常见的出错点）
+
+PYTHONPATH=src python3 -c "from wpsclip.core import clipboard_has; print(clipboard_has('/任意/存在的/文件'))"
+```
+
+`recent.py` 里那个 `\x` 变长转义正则（`{1,4}`、遇非十六进制即停）是全项目最容易踩坑的
+一行，动它之前先看下面「为什么读 `Office.conf`」那节。
+
+---
+
+## 目录结构
+
+源码树：
+
+```
+wps-clip-bridge/
+├── src/wpsclip/             Python 包
+│   ├── core.py              路径、配置、日志、单实例锁、剪贴板读取
+│   ├── recent.py            解析 WPS 的 Office.conf
+│   ├── bridge.py            常驻剪贴板服务
+│   ├── service.py           服务编排：确保在跑、发起复制、确认结果
+│   ├── cli.py               命令行 wps-copy
+│   ├── gui.py               图形窗口 wps-copy-gui
+│   ├── hotkey.py            全局热键 wps-copy-hotkey
+│   └── daemon.py            看护进程 wps-clip-bridge-daemon
+├── bin/                     5 个可执行入口（薄壳，转手给上面的模块）
+├── data/                    菜单项、自启项、图标、man page
+├── debian/                  control、维护脚本、copyright、changelog
+├── dist/                    打包产物（已放 1.0.0）
+├── build/                   构建中间目录，每次构建重建，可随时删
+├── build.sh
+└── .gitignore
+```
+
+安装后：
+
+```
+/usr/bin/wps-copy                    命令行
+/usr/bin/wps-copy-gui                图形窗口
+/usr/bin/wps-copy-hotkey             热键守护
+/usr/bin/wps-clip-bridge             剪贴板服务
+/usr/bin/wps-clip-bridge-daemon      后台守护（自启的就是它）
+/usr/lib/python3/dist-packages/wpsclip/
+/usr/share/applications/wps-clip-bridge.desktop
+/usr/share/icons/hicolor/scalable/apps/wps-clip-bridge.svg
+/usr/share/man/man1/wps-copy.1.gz
+/etc/xdg/autostart/wps-clip-bridge.desktop
+```
+
+运行期文件走 XDG，不写死家目录：
+
+| 用途 | 位置 |
+|---|---|
+| 锁文件、复制请求 | `$XDG_RUNTIME_DIR/wps-clip-bridge/`（注销自动清理） |
+| 日志 | `~/.local/state/wps-clip-bridge/`（daemon / bridge / hotkey / gui 各一份） |
+| 配置 | `~/.config/wps-clip-bridge/config.ini` |
+
+---
+
+## 几个设计上的取舍
+
+**为什么必须有一个常驻进程？**
+
+X11 的 selection（剪贴板）由**写入方**持有，写入方退出，剪贴板内容就没了。
+所以工具窗口不能自己当持有者，否则窗口一关就复制失效。
+常驻的 `bridge` 负责长期持有，窗口只负责「告诉它复制哪个」。
+
+**为什么用 flock 而不是 `pgrep -f`？**
+
+`pgrep -f` 会匹配到命令行里恰好含同样字样的其他进程 —— 开发过程中就踩过：
+热键进程把当前 shell 的命令行当成了「GUI 已在运行」，于是永远不弹窗。
+flock 是内核级互斥，不会误判。
+
+**为什么有 `daemon` 这一层？**
+
+登录自启不提供崩溃重启，所以 `daemon` 负责看护 `bridge` 和 `hotkey`，
+子进程异常退出就重启，连续崩溃则指数退避（2s → 30s），免得刷日志烧 CPU。
+它还负责在启动前等 X 就绪 —— 登录自启可能比合成器更早执行。
+
+**为什么读 `Office.conf` 而不是调 WPS 的接口？**
+
+WPS 没有提供可用的对外接口。`~/.config/Kingsoft/Office.conf` 是它自己的最近文档
+记录，格式是一个 INI，路径用 `\x` + **2~4 位**十六进制转义。
+
+这里有个坑值得记下来：ASCII 字符也会被转义，比如文件名里的 `2026` 写成
+`\x32\x30\x32\x36`。早期按「定长 4 位」解析会把 `\x32\x30` 吃成一个字符 `0x3230`，
+整条路径变乱码、文件被判为不存在而被过滤掉 —— 表现就是「名字带数字的文件在列表里
+看不到」。现在按「最多 4 位、遇非十六进制字符即停」解析。
+
+---
+
+## 已知限制
+
+- **热键只在 X11 / XWayland 应用前台时有效。** WPS、微信、文件管理器都是 XWayland
+  客户端，所以日常够用；但如果当前焦点在 Wayland 原生应用（如某些 GTK4 程序）上，
+  X11 的 `grab_key` 收不到按键。这是 X11 键盘抓取的固有限制，无解。
+- **`Ctrl+Alt+C` 可能被其他程序占用。** 冲突时热键起不来，可改配置换一个组合。
+- **只列本机存在文件。** 纯云端、本地无落盘文件的文档没有可复制的对象。
+- **`python3-xlib` 来自 `universe` 源。** 如果目标机器禁用了 universe，
+  `apt install` 会报缺依赖，需要先启用源或手动装这个包。
+
+---
+
+## 排障
+
+```sh
+wps-copy --status                     # 三个组件是否都在跑
+tail -n 40 ~/.local/state/wps-clip-bridge/daemon.log
+tail -n 40 ~/.local/state/wps-clip-bridge/bridge.log
+```
+
+`bridge.log` 里这几行有用：
+
+- `published copy 1 path(s): [...]` —— 成功把文件放进剪贴板
+- `REQ FILE-URI <- text/uri-list (N bytes)` —— 有应用来取文件了
+- `owner=0x... targets=[...]` —— 剪贴板换了持有者，以及它声明了哪些格式
+- `file-copy detected but no path parsed` —— 认出了是文件复制但解析不出路径
+
+如果粘贴还是灰的，先确认：**复制之后有没有再碰过 WPS 的「复制」按钮**。
+那个按钮是空操作，一点就把剪贴板清空，覆盖掉刚放进的文件。

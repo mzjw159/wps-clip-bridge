@@ -1,0 +1,55 @@
+#!/bin/sh
+# 安装后脚本：刷新缓存、提示迁移旧部署。
+set -e
+
+if [ "$1" = "configure" ]; then
+    # 图标缓存
+    if [ -x /usr/bin/gtk-update-icon-cache ]; then
+        gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    fi
+    # 应用菜单
+    if [ -x /usr/bin/update-desktop-database ]; then
+        update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+    fi
+
+    # 检测旧的手工部署，提示用户清理，避免两套程序抢剪贴板和热键
+    OLD=""
+    for d in /home/*; do
+        [ -d "$d" ] || continue
+        if [ -e "$d/.config/autostart/wps-hotkey.desktop" ] || \
+           [ -e "$d/.wps-clip-bridge.req" ] || \
+           [ -d "$d/WorkBuddy/files/services/wps-clip-bridge" ]; then
+            OLD="$OLD  $d
+"
+        fi
+    done
+
+    if [ -n "$OLD" ]; then
+        cat <<EOF
+
+注意：检测到旧的手工部署，可能存在两套程序同时运行：
+$OLD
+请在对应账号下执行一次迁移（会清理旧的登录自启项和残留进程）：
+
+    wps-copy --migrate
+
+EOF
+    fi
+
+    cat <<EOF
+
+安装完成。
+
+  立即启动    运行  wps-copy --start     （不用重新登录）
+  图形界面    应用菜单 →「WPS 最近文档复制」，或  wps-copy --gui
+  命令行      wps-copy --list   查看最近文档
+              wps-copy 3        复制第 3 个
+  全局热键    Ctrl+Alt+C         （可改，见 ~/.config/wps-clip-bridge/config.ini）
+
+后台服务已设为登录自启，下次开机会自动运行。
+查看状态：wps-copy --status
+
+EOF
+fi
+
+exit 0

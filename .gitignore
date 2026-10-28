@@ -1,0 +1,12 @@
+# 构建中间产物（build.sh 每次都会重建）
+/build/
+
+# 打包产物：dist/ 里只保留要交付的 .deb，其余忽略
+/dist/*
+!/dist/*.deb
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/

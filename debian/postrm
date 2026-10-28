@@ -1,0 +1,21 @@
+#!/bin/sh
+# 卸载后脚本：刷新缓存；purge 时提示清理用户配置。
+set -e
+
+if [ -x /usr/bin/gtk-update-icon-cache ]; then
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+if [ -x /usr/bin/update-desktop-database ]; then
+    update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+fi
+
+if [ "$1" = "purge" ]; then
+    echo ""
+    echo "用户级配置和日志未自动删除（其中可能有你改过的热键设置）："
+    echo "    ~/.config/wps-clip-bridge/"
+    echo "    ~/.local/state/wps-clip-bridge/"
+    echo "需要彻底清理可以手动删除这两个目录。"
+    echo ""
+fi
+
+exit 0

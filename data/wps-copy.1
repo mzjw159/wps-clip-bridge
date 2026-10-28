@@ -1,0 +1,94 @@
+.TH WPS-COPY 1 "2026-10-28" "wps-clip-bridge 1.0.0" "User Commands"
+.SH NAME
+wps\-copy \- put a WPS recent document on the X11 clipboard as a real file
+.SH SYNOPSIS
+.B wps\-copy
+[\fIOPTIONS\fR]
+.br
+.B wps\-copy
+\fINUMBER\fR | \fIKEYWORD\fR
+.br
+.B wps\-copy \-f
+\fIFILE\fR [\fIFILE\fR ...]
+.SH DESCRIPTION
+.B wps\-copy
+lists the documents recently opened by WPS for Linux (read from
+.IR ~/.config/Kingsoft/Office.conf )
+and writes the chosen file to the X11 clipboard as a real file object,
+so it can be pasted into the desktop, WeChat, a mail client, etc.
+.PP
+This exists because the "Copy" action on the WPS document list is a no-op
+on Linux: it takes ownership of the CLIPBOARD selection but never writes any
+data into it, so nothing can be pasted anywhere.
+.PP
+With no arguments the most recently modified document is copied.
+The clipboard is held by a background service, so closing any window does
+not invalidate the copied file.
+.SH OPTIONS
+.TP
+.B \-l, \-\-list
+List recent documents with their index numbers.
+.TP
+.B \-f, \-\-file \fIFILE\fR ...
+Copy the given files instead of consulting the recent list.
+Multiple files are allowed.
+.TP
+.B \-g, \-\-gui
+Open the graphical picker window.
+.TP
+.B \-\-start
+Start the background service now, so that a re-login is not required
+right after installation.
+.TP
+.B \-\-stop
+Stop the background service.
+.TP
+.B \-s, \-\-status
+Show the state of the background service, hotkey and picker window.
+.TP
+.B \-\-migrate
+Remove a previous manual installation (autostart entries, stray processes
+and leftover runtime files) so that it cannot fight with this package.
+Run once after installing if you had been running the scripts by hand.
+.TP
+.B \-V, \-\-version
+Print version and exit.
+.TP
+.B \-h, \-\-help
+Print usage and exit.
+.SH FILES
+.TP
+.I ~/.config/wps-clip-bridge/config.ini
+User configuration. The hotkey is set here, see
+.BR wps\-copy\-hotkey (1).
+.TP
+.I ~/.local/state/wps-clip-bridge/
+Log files (bridge.log, hotkey.log, daemon.log).
+.TP
+.I $XDG_RUNTIME_DIR/wps-clip-bridge/
+Locks and the copy-request file; cleared on logout.
+.SH EXAMPLES
+.PP
+Copy the newest recent document:
+.PP
+.RS 4
+wps\-copy
+.RE
+.PP
+List candidates, then copy the third one:
+.PP
+.RS 4
+wps\-copy \-\-list
+.br
+wps\-copy 3
+.RE
+.PP
+Copy every file whose name contains a keyword:
+.PP
+.RS 4
+wps\-copy 报告
+.RE
+.SH SEE ALSO
+.BR wps\-copy\-gui (1),
+.BR wps\-copy\-hotkey (1),
+.BR wps\-clip\-bridge\-daemon (1)

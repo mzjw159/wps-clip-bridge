@@ -1,0 +1,10 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""图形窗口：图形化的最近文档选择器。"""
+import sys
+
+from wpsclip.gui import main
+
+
+if __name__ == '__main__':
+    sys.exit(main())

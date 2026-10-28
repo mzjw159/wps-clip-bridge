@@ -1,0 +1,16 @@
+Package: wps-clip-bridge
+Version: 1.0.0
+Architecture: all
+Maintainer: shuai <shuai@localhost>
+Installed-Size: 240
+Depends: python3 (>= 3.6), python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, python3-xlib
+Section: utils
+Priority: optional
+Description: 让 WPS 文档能复制粘贴到桌面和微信
+ WPS for Linux 在文档列表里右键「复制」时只拿下剪贴板所有权，并没有把
+ 任何文件数据写进系统剪贴板，所以粘到桌面、微信时「粘贴」是灰的。
+ 本工具绕开那个按钮：直接读取 WPS 的最近文档记录，把文件作为真正的
+ 文件对象放进剪贴板，同时提供全局热键和图形选择窗口。
+ .
+ 提供三个入口：命令行 wps-copy、图形窗口 wps-copy-gui、全局热键
+ Ctrl+Alt+C，以及负责长期持有剪贴板的常驻后台服务。

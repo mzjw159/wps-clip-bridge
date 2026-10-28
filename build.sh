@@ -1,0 +1,102 @@
+#!/bin/sh
+# 构建 wps-clip-bridge 的 .deb 安装包。
+#
+#   ./build.sh            构建到本项目的 dist/
+#   ./build.sh --check    构建后额外做一致性检查
+#
+# 可用环境变量覆盖：OUT=/path/to/dir ./build.sh
+#
+# 依赖：dpkg-deb、gzip。不需要 fakeroot（用 --root-owner-group）。
+set -e
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+SRC="$HERE/src"
+DATA="$HERE/data"
+DEB="$HERE/debian"
+BUILD="$HERE/build"
+OUT="${OUT:-$HERE/dist}"
+
+VERSION=$(sed -n 's/^Version:[[:space:]]*//p' "$DEB/control" | head -1)
+PKG=$(sed -n 's/^Package:[[:space:]]*//p' "$DEB/control" | head -1)
+ARCH=$(sed -n 's/^Architecture:[[:space:]]*//p' "$DEB/control" | head -1)
+NAME="${PKG}_${VERSION}_${ARCH}"
+
+die() { echo "构建失败：$*" >&2; exit 1; }
+
+command -v dpkg-deb >/dev/null 2>&1 || die "缺少 dpkg-deb"
+
+echo "==> 清理"
+rm -rf "$BUILD"
+mkdir -p "$BUILD/$NAME" "$OUT"
+
+R="$BUILD/$NAME"
+
+echo "==> 安装 Python 包"
+install -d -m 755 "$R/usr/lib/python3/dist-packages/wpsclip"
+for f in "$SRC"/wpsclip/*.py; do
+    install -m 644 "$f" "$R/usr/lib/python3/dist-packages/wpsclip/"
+done
+
+echo "==> 安装可执行入口"
+install -d -m 755 "$R/usr/bin"
+for f in "$HERE"/bin/*; do
+    install -m 755 "$f" "$R/usr/bin/$(basename "$f")"
+done
+
+echo "==> 安装菜单项与图标"
+install -d -m 755 "$R/usr/share/applications"
+install -m 644 "$DATA/wps-clip-bridge.desktop" "$R/usr/share/applications/"
+install -d -m 755 "$R/usr/share/icons/hicolor/scalable/apps"
+install -m 644 "$DATA/wps-clip-bridge.svg" "$R/usr/share/icons/hicolor/scalable/apps/"
+
+echo "==> 安装开机自启项"
+install -d -m 755 "$R/etc/xdg/autostart"
+install -m 644 "$DATA/wps-clip-bridge-autostart.desktop" \
+    "$R/etc/xdg/autostart/wps-clip-bridge.desktop"
+
+echo "==> 安装 man page"
+install -d -m 755 "$R/usr/share/man/man1"
+gzip -9nc "$DATA/wps-copy.1" > "$R/usr/share/man/man1/wps-copy.1.gz"
+chmod 644 "$R/usr/share/man/man1/wps-copy.1.gz"
+
+echo "==> 安装文档"
+install -d -m 755 "$R/usr/share/doc/$PKG"
+install -m 644 "$DEB/copyright" "$R/usr/share/doc/$PKG/copyright"
+install -m 644 "$HERE/README.md" "$R/usr/share/doc/$PKG/README.md"
+gzip -9nc "$DEB/changelog" > "$R/usr/share/doc/$PKG/changelog.gz"
+chmod 644 "$R/usr/share/doc/$PKG/changelog.gz"
+
+echo "==> 生成 DEBIAN 控制文件"
+install -d -m 755 "$R/DEBIAN"
+install -m 644 "$DEB/control" "$R/DEBIAN/control"
+install -m 644 "$DEB/conffiles" "$R/DEBIAN/conffiles"
+install -m 755 "$DEB/postinst" "$R/DEBIAN/postinst"
+install -m 755 "$DEB/prerm" "$R/DEBIAN/prerm"
+install -m 755 "$DEB/postrm" "$R/DEBIAN/postrm"
+
+# 清理不应入包的东西
+find "$R" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+find "$R" -name '*.pyc' -delete 2>/dev/null || true
+
+# 按实际大小回填 Installed-Size
+SIZE=$(du -sk --exclude=DEBIAN "$R" | cut -f1)
+sed -i "s/^Installed-Size:.*/Installed-Size: $SIZE/" "$R/DEBIAN/control"
+echo "    已安装大小：${SIZE} KB"
+
+echo "==> 打包"
+dpkg-deb --build --root-owner-group "$R" "$OUT/$NAME.deb" >/dev/null
+
+echo ""
+echo "构建完成：$OUT/$NAME.deb"
+ls -lh "$OUT/$NAME.deb" | awk '{print "    体积：" $5}'
+
+if [ "$1" = "--check" ]; then
+    echo ""
+    echo "==> 检查：包信息"
+    dpkg-deb -I "$OUT/$NAME.deb"
+    echo "==> 检查：包含的文件"
+    dpkg-deb -c "$OUT/$NAME.deb" | awk '{print "    " $1, $6}'
+    echo "==> 检查：菜单项语法"
+    desktop-file-validate "$DATA/wps-clip-bridge.desktop" && echo "    菜单项 OK"
+    desktop-file-validate "$DATA/wps-clip-bridge-autostart.desktop" && echo "    自启项 OK"
+fi

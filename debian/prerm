@@ -1,0 +1,19 @@
+#!/bin/sh
+# 卸载/升级前：优雅停止后台服务。
+set -e
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        if command -v pkill >/dev/null 2>&1; then
+            # 守护进程收到 SIGTERM 会自己停掉子进程
+            pkill -TERM -f '/usr/bin/wps-clip-bridge-daemon' 2>/dev/null || true
+            sleep 1
+            # 兜底：残留的独立进程
+            pkill -TERM -f '/usr/bin/wps-clip-bridge$' 2>/dev/null || true
+            pkill -TERM -f '/usr/bin/wps-copy-hotkey' 2>/dev/null || true
+            pkill -TERM -f '/usr/bin/wps-copy-gui' 2>/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

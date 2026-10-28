@@ -1,0 +1,12 @@
+wps-clip-bridge (1.0.0) unstable; urgency=medium
+
+  * 首个版本。
+  * 常驻剪贴板服务：补救缺失 text/uri-list 的文件型剪贴板，保留 copy/cut 语义。
+  * 读取 WPS 最近文档记录（含云文档本地副本），支持变长 \xHH[HH] 转义。
+  * 命令行 wps-copy：--list / 序号 / 关键词 / -f 指定文件。
+  * 图形窗口 wps-copy-gui：搜索、刷新、浏览本地文件（多选）。
+  * 全局热键 Ctrl+Alt+C，可配置，已在运行时唤醒旧窗口。
+  * 后台守护进程看护服务与热键，登录自启。
+  * wps-copy --migrate 清理旧的手工部署。
+
+ -- shuai <shuai@localhost>  Wed, 28 Oct 2026 15:30:00 +0800

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <title>WPS 最近文档复制</title>
+  <rect x="9" y="4" width="24" height="33" rx="3" ry="3"
+        fill="#ffffff" stroke="#6b7785" stroke-width="2"/>
+  <path d="M33 4 L33 12 L41 12" fill="#e8edf2" stroke="#6b7785" stroke-width="2"
+        stroke-linejoin="round"/>
+  <path d="M33 4 L41 12" fill="none" stroke="#6b7785" stroke-width="2"/>
+  <g stroke="#9aa5b1" stroke-width="2" stroke-linecap="round">
+    <line x1="15" y1="14" x2="27" y2="14"/>
+    <line x1="15" y1="20" x2="27" y2="20"/>
+    <line x1="15" y1="26" x2="22" y2="26"/>
+  </g>
+  <circle cx="34" cy="34" r="10" fill="#e8443a"/>
+  <rect x="28.5" y="29" width="8" height="8" rx="1.4"
+        fill="none" stroke="#ffffff" stroke-width="1.8"/>
+  <rect x="31.5" y="32" width="8" height="8" rx="1.4"
+        fill="#e8443a" stroke="#ffffff" stroke-width="1.8"/>
+</svg>

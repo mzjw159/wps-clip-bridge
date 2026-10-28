@@ -1,0 +1,10 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""后台守护：拉起并看护桥接服务与热键。"""
+import sys
+
+from wpsclip.daemon import main
+
+
+if __name__ == '__main__':
+    sys.exit(main())
