@@ -46,11 +46,18 @@ done
 echo "==> 安装菜单项与图标"
 install -d -m 755 "$R/usr/share/applications"
 install -m 644 "$DATA/wps-clip-bridge.desktop" "$R/usr/share/applications/"
+
+# 矢量图标（任意尺寸都清晰）
 install -d -m 755 "$R/usr/share/icons/hicolor/scalable/apps"
 install -m 644 "$DATA/wps-file.svg" "$R/usr/share/icons/hicolor/scalable/apps/"
-# 光栅回退图标（部分桌面环境不渲染 SVG）
-install -d -m 755 "$R/usr/share/icons/hicolor/256x256/apps"
-install -m 644 "$DATA/wps-file.png" "$R/usr/share/icons/hicolor/256x256/apps/"
+
+# 常见尺寸的光栅图标（部分面板/桌面环境只认固定尺寸 PNG）
+for sz in 48 64 128 256 512; do
+    src="$DATA/icons/hicolor/${sz}x${sz}/apps/wps-file.png"
+    [ -f "$src" ] || die "缺少图标：$src"
+    install -d -m 755 "$R/usr/share/icons/hicolor/${sz}x${sz}/apps"
+    install -m 644 "$src" "$R/usr/share/icons/hicolor/${sz}x${sz}/apps/"
+done
 
 echo "==> 安装开机自启项"
 install -d -m 755 "$R/etc/xdg/autostart"

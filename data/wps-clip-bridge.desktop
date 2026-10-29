@@ -11,5 +11,6 @@ Exec=wps-copy --gui
 Icon=wps-file
 Terminal=false
 StartupNotify=true
+StartupWMClass=wps-clip-bridge
 Categories=Utility;
 Keywords=wps;clipboard;copy;paste;复制;粘贴;剪贴板;

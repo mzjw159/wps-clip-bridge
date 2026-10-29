@@ -18,7 +18,8 @@ import gi  # noqa: E402
 
 gi.require_version('Gdk', '3.0')
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
 
 from . import recent, service  # noqa: E402
 
@@ -33,6 +34,36 @@ def human_size(n):
     return str(n)
 
 
+def _load_app_icon():
+    """加载应用图标：优先主题名，其次按安装路径/源码路径直接读文件。
+
+    历史 bug：图标名曾为 wps-clip-bridge，换成 wps-file 后这里没同步，
+    导致窗口/任务栏/托盘显示默认图标。多级回退保证装到哪儿都正确。
+    """
+    try:
+        theme = Gtk.IconTheme.get_default()
+        if theme.has_icon('wps-file'):
+            return theme.load_icon('wps-file', 128, 0)
+    except Exception:
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (
+        '/usr/share/icons/hicolor/scalable/apps/wps-file.svg',
+        '/usr/share/icons/hicolor/256x256/apps/wps-file.png',
+        '/usr/share/icons/hicolor/128x128/apps/wps-file.png',
+        '/usr/share/icons/hicolor/64x64/apps/wps-file.png',
+        '/usr/share/icons/hicolor/48x48/apps/wps-file.png',
+        os.path.join(here, '..', '..', 'data', 'wps-file.svg'),
+        os.path.join(here, '..', '..', 'data', 'wps-file.png'),
+    ):
+        try:
+            if os.path.exists(p):
+                return GdkPixbuf.Pixbuf.new_from_file(p)
+        except Exception:
+            continue
+    return None
+
+
 class App(object):
     def __init__(self):
         self.rows = []
@@ -41,7 +72,11 @@ class App(object):
         self.win = Gtk.Window(title='WPS 最近文档 · 一键复制')
         self.win.set_default_size(780, 540)
         self.win.set_border_width(12)
-        self.win.set_icon_name('wps-clip-bridge')
+        _icon = _load_app_icon()
+        if _icon is not None:
+            self.win.set_icon(_icon)
+        else:
+            self.win.set_icon_name('wps-file')
         self.win.connect('destroy', Gtk.main_quit)
         self.win.connect('key-press-event', self.on_key)
 
@@ -220,6 +255,9 @@ class App(object):
 
 
 def main(argv=None):
+    # 让窗口 WM_CLASS 与 .desktop 文件名一致，桌面环境才能把运行中的窗口
+    # 关联到应用图标（否则任务栏/托盘里显示的是默认图标）
+    GLib.set_prgname('wps-clip-bridge')
     si = core.SingleInstance('gui')
     if not si.acquire():
         # 已有窗口在跑，唤醒它
