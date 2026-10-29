@@ -1,3 +1,15 @@
+wps-clip-bridge (1.2.0) unstable; urgency=medium
+
+  * 列表支持多选与拖拽：
+    - Ctrl 点选 / Shift 连选 / Ctrl+A 全选；分组标题不参与选中。
+    - 双击多选中的任意一行、Ctrl+C 或点「复制 N 个文件」都能整组复制。
+    - 选中行可直接拖到微信、桌面或文件管理器（导出标准 text/uri-list）。
+    - 右键菜单与批量操作（打开、复制路径、移到回收站）按选中数量自适应。
+  * 新增单元测试（tests/，89 个用例，无需图形环境）：覆盖 WPS 配置转义
+    解析、URI 列表解析、时间分桶、配置热重载与开机自启开关。
+
+ -- shuai <shuai@localhost>  Thu, 29 Oct 2026 17:20:00 +0800
+
 wps-clip-bridge (1.1.0) unstable; urgency=medium
 
   * 新增设置窗口（标题栏齿轮按钮）：

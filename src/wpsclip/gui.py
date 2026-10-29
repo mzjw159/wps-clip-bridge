@@ -267,7 +267,7 @@ class App(object):
         hb = Gtk.HeaderBar()
         hb.set_show_close_button(True)
         hb.set_title('WPS 最近文档')
-        hb.set_subtitle('双击复制 · 右键更多操作')
+        hb.set_subtitle('双击复制 · 可拖到微信 · Ctrl/Shift 多选')
         self.win.set_titlebar(hb)
 
         self.settings_btn = Gtk.Button()
@@ -364,8 +364,15 @@ class App(object):
 
         view.connect('row-activated', self.on_activate)
         view.connect('button-press-event', self.on_button_press)
-        view.get_selection().connect('changed', self.on_select)
+
+        # 多选：Ctrl 点选、Shift 连选。分组标题不是文件，用 select_function
+        # 挡在选中之外——否则 Ctrl+A 会把分组行也算进去，拖拽时更会带上空路径。
+        sel = view.get_selection()
+        sel.set_mode(Gtk.SelectionMode.MULTIPLE)
+        sel.set_select_function(self._select_filter, None)
+        sel.connect('changed', self.on_select)
         self.view = view
+        self._setup_drag(view)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -549,8 +556,12 @@ class App(object):
             total += len(items)
 
         self.view.expand_all()
+        # 重载后选择被清空，按钮状态要跟着复位（clear() 未必触发 changed）
+        self.copy_btn.set_sensitive(False)
+        self.copy_btn.set_label('复制选中文件')
         if total:
-            self.set_status('共 %d 个文档 · 双击复制，右键更多操作' % total)
+            self.set_status('共 %d 个文档 · 双击复制、拖到微信，Ctrl/Shift 可多选'
+                            % total)
         elif kw:
             self.set_status('没有匹配「%s」的文档' % kw)
         else:
@@ -560,14 +571,72 @@ class App(object):
         self.reload()
 
     # ------------------------------------------------ 选择 / 右键
-    def on_select(self, sel):
-        self.copy_btn.set_sensitive(self.current_path() is not None)
+    def _select_filter(self, _sel, model, path, _selected, _data):
+        """分组标题不允许被选中（多选与拖拽都靠这道闸）。"""
+        try:
+            it = model.get_iter(path)
+        except Exception:
+            return False
+        return not model[it][C_ISGROUP]
+
+    def selected_paths(self):
+        """所有选中文件的路径，按列表顺序，已剔除分组行与重复项。"""
+        model, rows = self.view.get_selection().get_selected_rows()
+        out, seen = [], set()
+        for p in rows:
+            try:
+                it = model.get_iter(p)
+            except Exception:
+                continue
+            if model[it][C_ISGROUP]:
+                continue
+            path = model[it][C_PATH]
+            if path and path not in seen:
+                seen.add(path)
+                out.append(path)
+        return out
 
     def current_path(self):
-        model, it = self.view.get_selection().get_selected()
-        if it is None or model[it][C_ISGROUP]:
-            return None
-        return model[it][C_PATH]
+        """主选中项（多选时取第一个），供「打开」「打开所在位置」等单文件操作。"""
+        paths = self.selected_paths()
+        return paths[0] if paths else None
+
+    def on_select(self, sel):
+        n = len(self.selected_paths())
+        self.copy_btn.set_sensitive(n > 0)
+        self.copy_btn.set_label('复制选中文件' if n <= 1 else '复制 %d 个文件' % n)
+        if n:
+            self.set_status('已选 %d 个 · 双击复制，也可以直接拖到微信窗口' % n)
+
+    # ------------------------------------------------ 拖拽到外部应用
+    def _setup_drag(self, view):
+        """把选中的文件拖出去：微信、桌面、文件管理器都能直接接收。"""
+        try:
+            view.drag_source_set(
+                Gdk.ModifierType.BUTTON1_MASK,
+                [Gtk.TargetEntry.new('text/uri-list', 0, 0)],
+                Gdk.DragAction.COPY)
+            view.connect('drag-data-get', self._on_drag_data_get)
+            view.connect('drag-begin', self._on_drag_begin)
+        except Exception as ex:
+            core.log('拖拽源初始化失败: %r' % (ex,))
+
+    def _on_drag_data_get(self, _view, _ctx, data, _info, _time):
+        paths = self.selected_paths()
+        if not paths:
+            return
+        data.set_uris([GLib.filename_to_uri(p, None) for p in paths])
+
+    def _on_drag_begin(self, view, _ctx):
+        paths = self.selected_paths()
+        if not paths:
+            return
+        try:
+            pb = Gtk.IconTheme.get_default().load_icon(type_icon(paths[0]), 48, 0)
+            if pb is not None:
+                view.drag_source_set_icon_pixbuf(pb)
+        except Exception:
+            pass
 
     def on_button_press(self, view, event):
         if event.button != 3:
@@ -580,19 +649,26 @@ class App(object):
         it = model.get_iter(path)
         if model[it][C_ISGROUP]:
             return False
-        view.get_selection().select_path(path)
+        sel = view.get_selection()
+        # 右键点在已选中的行上 → 保留整组选择（可以对多选批量操作）；
+        # 点在别处 → 只选这一行，跟文件管理器的习惯一致。
+        if not sel.path_is_selected(path):
+            sel.unselect_all()
+            sel.select_path(path)
         self.show_context_menu(event)
         return True
 
     def show_context_menu(self, event):
+        n = len(self.selected_paths())
         menu = Gtk.Menu()
         entries = (
-            ('打开', self.on_open_file),
+            ('打开' if n <= 1 else '打开 %d 个文件' % n, self.on_open_file),
             ('打开所在位置', self.on_open_dir),
-            ('复制（放进剪贴板）', self.on_copy_clicked),
-            ('复制文件路径', self.on_copy_path),
+            ('复制（放进剪贴板）' if n <= 1 else '复制 %d 个文件' % n,
+             self.on_copy_clicked),
+            ('复制文件路径' if n <= 1 else '复制 %d 条路径' % n, self.on_copy_path),
             (None, None),
-            ('移到回收站', self.on_delete),
+            ('移到回收站' if n <= 1 else '把 %d 个移到回收站' % n, self.on_delete),
         )
         for label, cb in entries:
             if label is None:
@@ -617,66 +693,109 @@ class App(object):
             else:
                 view.expand_row(path, False)
             return
-        self.copy_paths([model[it][C_PATH]])
+        chosen = model[it][C_PATH]
+        # 双击的那一行若在选中集里，就复制整组；否则只复制这一行
+        paths = self.selected_paths()
+        if chosen not in paths:
+            paths = [chosen]
+        self.copy_paths(paths)
 
     def on_copy_clicked(self, *_):
-        p = self.current_path()
-        if not p:
-            self.set_status('请先在列表里选中一个文件')
+        paths = self.selected_paths()
+        if not paths:
+            self.set_status('请先在列表里选中文件')
             return
-        self.copy_paths([p])
+        self.copy_paths(paths)
 
     def on_copy_path(self, *_):
-        p = self.current_path()
-        if not p:
+        paths = self.selected_paths()
+        if not paths:
             return
         clip = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        clip.set_text(p, -1)
+        clip.set_text('\n'.join(paths), -1)
         clip.store()
-        self.set_status('已复制路径：%s' % p)
+        if len(paths) == 1:
+            self.set_status('已复制路径：%s' % paths[0])
+        else:
+            self.set_status('已复制 %d 条路径（每行一条）' % len(paths))
 
     def on_open_file(self, *_):
-        p = self.current_path()
-        if not p:
+        paths = self.selected_paths()
+        if not paths:
             return
-        try:
-            Gtk.show_uri(None, GLib.filename_to_uri(p, None),
-                         Gtk.get_current_event_time())
-        except Exception as ex:
-            self.set_status('打开失败：%s' % ex)
+        # 一次开太多会让桌面卡住，超出就只开前 8 个并说明
+        limit = 8
+        shown, failed = paths[:limit], 0
+        for p in shown:
+            try:
+                Gtk.show_uri(None, GLib.filename_to_uri(p, None),
+                             Gtk.get_current_event_time())
+            except Exception:
+                failed += 1
+        if len(paths) > limit:
+            self.set_status('已打开前 %d 个（共选中 %d 个）' % (limit, len(paths)))
+        elif failed:
+            self.set_status('有 %d 个文件打开失败' % failed)
+        else:
+            self.set_status('正在打开 %d 个文件…' % len(shown))
 
     def on_open_dir(self, *_):
-        p = self.current_path()
-        if not p:
+        paths = self.selected_paths()
+        if not paths:
             return
-        try:
-            Gtk.show_uri(None, GLib.filename_to_uri(os.path.dirname(p), None),
-                         Gtk.get_current_event_time())
-        except Exception as ex:
-            self.set_status('打开文件夹失败：%s' % ex)
+        dirs = []
+        for p in paths:
+            d = os.path.dirname(p)
+            if d and d not in dirs:
+                dirs.append(d)
+        for d in dirs[:3]:
+            try:
+                Gtk.show_uri(None, GLib.filename_to_uri(d, None),
+                             Gtk.get_current_event_time())
+            except Exception as ex:
+                self.set_status('打开文件夹失败：%s' % ex)
+                return
+        if len(dirs) > 3:
+            self.set_status('已打开前 3 个文件夹（共 %d 个）' % len(dirs))
+        elif len(dirs) > 1:
+            self.set_status('已打开 %d 个文件夹' % len(dirs))
 
     def on_delete(self, *_):
-        p = self.current_path()
-        if not p:
+        paths = self.selected_paths()
+        if not paths:
             return
-        name = os.path.basename(p)
+        if len(paths) == 1:
+            text = '移到回收站？'
+            sub = '「%s」\n可从系统回收站还原。' % os.path.basename(paths[0])
+        else:
+            text = '把这 %d 个文件移到回收站？' % len(paths)
+            head = '\n'.join(os.path.basename(p) for p in paths[:5])
+            if len(paths) > 5:
+                head += '\n…'
+            sub = '%s\n\n可从系统回收站还原。' % head
         dlg = Gtk.MessageDialog(parent=self.win, modal=True,
                                 message_type=Gtk.MessageType.QUESTION,
-                                buttons=Gtk.ButtonsType.NONE,
-                                text='移到回收站？')
-        dlg.format_secondary_text('「%s」\n可从系统回收站还原。' % name)
+                                buttons=Gtk.ButtonsType.NONE, text=text)
+        dlg.format_secondary_text(sub)
         dlg.add_button('取消', Gtk.ResponseType.CANCEL)
         dlg.add_button('移到回收站', Gtk.ResponseType.OK)
         resp = dlg.run()
         dlg.destroy()
         if resp != Gtk.ResponseType.OK:
             return
-        try:
-            Gio.File.new_for_path(p).trash(None)
-            self.set_status('已移到回收站：%s' % name)
-            self.reload()
-        except Exception as ex:
-            self.set_status('删除失败：%s' % ex)
+        ok, failed = 0, 0
+        for p in paths:
+            try:
+                Gio.File.new_for_path(p).trash(None)
+                ok += 1
+            except Exception as ex:
+                failed += 1
+                core.log('回收站失败 %s: %r' % (p, ex))
+        if failed:
+            self.set_status('已移到回收站 %d 个，%d 个失败' % (ok, failed))
+        else:
+            self.set_status('已移到回收站：%d 个' % ok)
+        self.reload()
 
     def on_browse(self, *_):
         dlg = Gtk.FileChooserDialog(title='选择要复制的文件', parent=self.win,
@@ -705,9 +824,18 @@ class App(object):
             else:
                 self.quit_app()
             return True
-        if event.keyval == Gdk.KEY_Delete and self.view.is_focus():
+        focused = self.view.is_focus()
+        if event.keyval == Gdk.KEY_Delete and focused:
             self.on_delete()
             return True
+        # 焦点在列表上时接管 Ctrl+A / Ctrl+C（否则会落到搜索框或什么都不做）
+        if focused and (event.state & Gdk.ModifierType.CONTROL_MASK):
+            if event.keyval in (Gdk.KEY_a, Gdk.KEY_A):
+                self.view.get_selection().select_all()
+                return True
+            if event.keyval in (Gdk.KEY_c, Gdk.KEY_C):
+                self.on_copy_clicked()
+                return True
         return False
 
     def set_status(self, text):
