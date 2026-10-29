@@ -1,10 +1,10 @@
 Package: wps-clip-bridge
-Version: 1.4.0
+Version: 1.4.1
 Architecture: all
 Maintainer: shuai <shuai@localhost>
 Installed-Size: 240
-Depends: python3 (>= 3.6), python3-gi, gir1.2-gtk-3.0, python3-xlib
-Recommends: gir1.2-appindicator3-0.1 | gir1.2-ayatanaappindicator3-0.1, libnotify-bin
+Depends: python3 (>= 3.6), python3-gi, gir1.2-gtk-3.0
+Recommends: python3-xlib, gir1.2-appindicator3-0.1 | gir1.2-ayatanaappindicator3-0.1, libnotify-bin
 Section: utils
 Priority: optional
 Description: 让 WPS 文档能复制粘贴到桌面和微信
@@ -15,6 +15,10 @@ Description: 让 WPS 文档能复制粘贴到桌面和微信
  .
  提供三个入口：命令行 wps-copy、图形窗口 wps-copy-gui、全局热键
  Ctrl+Alt+C，以及负责长期持有剪贴板的常驻后台服务。
+ .
+ python-xlib 已打包在程序内部（系统里装了 python3-xlib 时优先用系统的），
+ 所以只剩桌面环境本来就有的 python3-gi / GTK3 两个依赖：双击安装包、
+ 或者离线 dpkg -i，都能直接装好并运行。
  .
  最近文档有多层解析：先按 WPS 的键名结构化解析，失败时退到
  「值像被转义的绝对路径」的通用扫描，再退到 GTK 最近使用记录和

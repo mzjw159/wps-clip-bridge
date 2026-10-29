@@ -189,8 +189,18 @@ def cmd_doctor(_args):
     for mod, hint in (('gi', 'python3-gi / gir1.2-gtk-3.0'),
                       ('Xlib', 'python3-xlib')):
         try:
-            __import__(mod)
-            print('  ✔ %-8s' % mod)
+            m = __import__(mod)
+            extra = ''
+            if mod == 'Xlib':
+                # 这份 Xlib 是系统装的还是包里自带的？出问题时这一步很关键：
+                # 自带的那份版本固定，「升级了 python3-xlib 之后坏了」就不成立。
+                ver = getattr(m, '__version__', None)
+                if isinstance(ver, tuple):
+                    ver = '.'.join(str(x) for x in ver)
+                where = ('内置' if '_vendor' in (getattr(m, '__file__', '') or '')
+                         else '系统')
+                extra = '  %s（%s）' % (ver or '?', where)
+            print('  ✔ %-8s%s' % (mod, extra))
         except Exception:
             print('  ✘ %-8s 缺少 %s' % (mod, hint))
             mark('bad', '缺少 Python 模块 %s（%s）' % (mod, hint))
@@ -246,12 +256,13 @@ def cmd_doctor(_args):
         mark('warn', '剪贴板服务没在跑；第一次复制会自动拉起（也可以先跑 wps-copy --start）。')
 
     print('\n诊断结论：')
-    print('  %s' % info['hint'])
+    if info['hint']:
+        print('  %s' % info['hint'])
     for msg in bad:
         print('  ✘ %s' % msg)
     for msg in warn:
         print('  ! %s' % msg)
-    if not bad and not warn:
+    if not bad and not warn and not info['hint']:
         print('  一切正常。')
     print('\n日志：%s' % os.path.join(core.state_dir(), 'daemon.log'))
     print('目录：运行期 %s' % core.runtime_dir())

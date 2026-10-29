@@ -1,3 +1,20 @@
+wps-clip-bridge (1.4.1) unstable; urgency=medium
+
+  * 把 python-xlib（及它依赖的 six）打包进程序内部，安装依赖从 4 个减到
+    2 个，且剩下的 python3-gi / gir1.2-gtk-3.0 是任何 GTK 桌面本来就有
+    的东西。因此：双击 .deb 用麒麟安装器装、离线 dpkg -i、apt install
+    三种方式都不会再因为缺 python3-xlib 而装不上或装完打不开。
+    - 运行时优先导入系统已安装的 python3-xlib，没有才用包内副本，
+      系统版更新/打过补丁时不会被这份固定版本顶掉；
+    - python3-xlib 从 Depends 降为 Recommends；
+    - debian/copyright 补充内置副本的 GPL-2+ 声明（上游元数据写的是
+      LGPLv2+，但其版权文件正文为 GPL-2+，按较严格者声明）。
+  * wps-copy --doctor 的依赖一项显示 Xlib 版本与来源（内置 / 系统），
+    出问题时报给维护者时能一眼看出用的是哪份。
+  * --doctor 在一切正常时不再打印一行空白的「诊断结论」。
+
+ -- shuai <shuai@localhost>  Thu, 29 Oct 2026 20:05:00 +0800
+
 wps-clip-bridge (1.4.0) unstable; urgency=medium
 
   * 最近文档改成三层解析，WPS 升级不再让列表静默变空：

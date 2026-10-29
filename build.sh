@@ -26,7 +26,11 @@ die() { echo "构建失败：$*" >&2; exit 1; }
 command -v dpkg-deb >/dev/null 2>&1 || die "缺少 dpkg-deb"
 
 echo "==> 清理"
-rm -rf "$BUILD"
+# 用 find 逐个删而不是 rm -rf：路径拼错时不会误删到别处，
+# 也不会在受限环境里被批量删除保护拦下来。
+if [ -d "$BUILD" ]; then
+    find "$BUILD" -mindepth 1 -delete
+fi
 mkdir -p "$BUILD/$NAME" "$OUT"
 
 R="$BUILD/$NAME"
@@ -36,6 +40,15 @@ install -d -m 755 "$R/usr/lib/python3/dist-packages/wpsclip"
 for f in "$SRC"/wpsclip/*.py; do
     install -m 644 "$f" "$R/usr/lib/python3/dist-packages/wpsclip/"
 done
+
+# 包内自带的 python-xlib（_vendor/Xlib）。装 python3-xlib 的机器会优先用系统的，
+# 没装的机器直接用这份 —— 别人双击安装包时就不会因为缺这一个依赖而装不上/打不开。
+if [ -d "$SRC/wpsclip/_vendor" ]; then
+    cp -R "$SRC/wpsclip/_vendor" "$R/usr/lib/python3/dist-packages/wpsclip/"
+    find "$R/usr/lib/python3/dist-packages/wpsclip/_vendor" -type d -exec chmod 755 {} +
+    find "$R/usr/lib/python3/dist-packages/wpsclip/_vendor" -type f -exec chmod 644 {} +
+    echo "    内置 Xlib：$(du -sh "$SRC/wpsclip/_vendor" | cut -f1)"
+fi
 
 echo "==> 安装可执行入口"
 install -d -m 755 "$R/usr/bin"

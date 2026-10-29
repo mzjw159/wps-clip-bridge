@@ -5,6 +5,7 @@ Source: 本地开发，无公开仓库
 Files: *
 Copyright: 2026 shuai <shuai@localhost>
 License: MIT
+ 本程序主体（src/wpsclip 下除 _vendor 外的全部文件）以 MIT 许可发布。
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
  in the Software without restriction, including without limitation the rights
@@ -22,3 +23,31 @@ License: MIT
  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
+
+Files: src/wpsclip/_vendor/Xlib/*
+Copyright: 2000-2002 Peter Liljenberg <petli@ctrl-c.liu.se>
+           2006 Alex Badea <vamposdecampos@gmail.com>
+           2006 Mike Meyer <mwm@mired.org>
+           2002 Jeffrey Boser <verin@lvcm.com>
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ On Debian systems, the complete text of the GNU General Public
+ License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+Comment:
+ 原样复制自发行版 python3-xlib 0.23（未做任何修改），目的是让本包在没装
+ python3-xlib 的机器上也能直接运行。程序运行时优先导入系统已安装的
+ python3-xlib，只有系统里没有时才用这份副本。
+ .
+ 上游 python-xlib 的元数据里写的是 LGPLv2+，但其随附的版权文件正文为
+ GPL-2+，此处按正文较严格的 GPL-2+ 声明。
+ .
+ MIT 与 GPL-2+ 兼容，故本包整体可按 GPL-2+ 分发。

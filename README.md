@@ -31,12 +31,20 @@ CLIPBOARD 持有者：Qt Selection Owner for wpsoffice
 
 ## 安装
 
+三种方式都行，效果一样：
+
 ```sh
-sudo apt install ./dist/wps-clip-bridge_1.4.0_all.deb
+sudo apt install ./dist/wps-clip-bridge_1.4.1_all.deb   # 命令行
 ```
 
-用 `apt` 而不是 `dpkg -i`，这样会自动补齐依赖（主要是 `python3-xlib`）。
-也可以直接在文件管理器里双击，用麒麟软件中心安装。
+- **双击** .deb 文件，用系统的安装器（麒麟上是「安装器 / kylin-installer」）；
+- 或者命令行 `sudo apt install ./wps-clip-bridge_1.4.1_all.deb`；
+- 或者离线时 `sudo dpkg -i wps-clip-bridge_1.4.1_all.deb`。
+
+从 1.4.1 起这三种方式**都不需要额外装任何东西**：`python-xlib` 已经打包在
+程序内部（系统里装了 `python3-xlib` 时优先用系统的），剩下的依赖
+`python3-gi` / `gir1.2-gtk-3.0` 是任何 GTK 桌面本来就会有的。
+`dpkg -i` 也不用再补依赖。
 
 装完 **不需要重启电脑**，执行一次即可开始使用：
 
@@ -156,15 +164,12 @@ wps-copy --doctor
 
 ## 把安装包发给别人
 
-可以，但要**用 `apt` 装，不要 `dpkg -i`**：
+可以。**直接双击就行**，不用教对方敲命令。
 
-```sh
-sudo apt install ./wps-clip-bridge_1.4.0_all.deb
-```
-
-`apt` 会补齐 `python3-xlib`、`python3-gi`、`gir1.2-gtk-3.0`；`dpkg -i` 不会，
-缺东西时程序会打印一段中文提示而不是崩掉（v1.4.0 起）。包是
-`Architecture: all` 的纯 Python，amd64 / arm64 通用。
+包是 `Architecture: all` 的纯 Python，amd64 / arm64 通用。唯一两个「可能
+没有」的依赖 `python3-gi`、`gir1.2-gtk-3.0` 是任何图形桌面自带的东西，
+`python-xlib` 已经打进包里了 —— 所以无论双击、`apt install` 还是离线
+`dpkg -i`，都不会出现「装完打不开」。
 
 对方机器上需要满足：
 
@@ -273,12 +278,12 @@ python3 -m wpsclip.bridge        # 剪贴板服务（前台跑，日志直接看
 python3 -m wpsclip.daemon        # 看护进程（依次拉起 bridge + hotkey）
 ```
 
-依赖：`python3-xlib`（X11 selection）、`python3-gi` + GTK3（图形窗口）。
+依赖：`python3-gi` + GTK3（图形窗口）、`python3-xlib`（X11 selection，已随包内置一份在 `src/wpsclip/_vendor/`，系统装了就用系统的）。
 代码兼容 Python 3.8+（麒麟 V10 自带 3.8）。
 
 ### 跑测试
 
-纯函数部分有单元测试（`tests/`，137 个用例），不需要图形界面，也不碰你的
+纯函数部分有单元测试（`tests/`，142 个用例），不需要图形界面，也不碰你的
 真实配置（每个用例都在临时目录里跑）：
 
 ```sh
@@ -287,6 +292,7 @@ python3 -m unittest discover -s tests -v       # 逐个用例
 python3 -m unittest tests.test_recent -v       # 只跑解析层
 python3 -m unittest tests.test_service -v      # 只跑复制编排
 python3 -m unittest tests.test_recent -v       # 只跑解析与多源兜底
+python3 -m unittest tests.test_vendor -v       # 只跑内置依赖自检
 ```
 
 覆盖 `unesc()` 的「2~4 位十六进制」边界、`parse_uris()` 的百分号解码、
@@ -336,6 +342,7 @@ wps-clip-bridge/
 │   ├── core.py              路径、配置、日志、单实例锁、剪贴板读取
 │   ├── bootstrap.py         入口脚本的友好启动（缺依赖给人话）
 │   ├── recent.py            最近文档：三层解析 + 兜底源 + 自检诊断
+│   ├── _vendor/             内置的 python-xlib 与 six（系统没装时兜底）
 │   ├── bridge.py            常驻剪贴板服务
 │   ├── service.py           服务编排：确保在跑、异步复制、确认结果
 │   ├── cli.py               命令行 wps-copy
@@ -438,8 +445,8 @@ WPS 没有提供可用的对外接口。`~/.config/Kingsoft/Office.conf` 是它�
   在设置里换一个组合键即可（X 的 GrabKey 冲突只会异步返回 BadAccess，
   v1.3.0 之前是完全静默的）。
 - **只列本机存在文件。** 纯云端、本地无落盘文件的文档没有可复制的对象。
-- **`python3-xlib` 来自 `universe` 源。** 如果目标机器禁用了 universe，
-  `apt install` 会报缺依赖，需要先启用源或手动装这个包。
+- **禁用了 `universe` 源也没关系。** `python3-xlib` 已内置在包里
+  （v1.4.1 起），不需要从源里装。
 
 ---
 
