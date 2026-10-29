@@ -12,13 +12,16 @@ import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {
     'hotkey': {
         'enabled': 'true',
         'combo': '<Control><Alt>c',
+        # 第二个热键：不用开窗口，直接把最近一个文档丢进剪贴板
+        'copy_enabled': 'true',
+        'copy_combo': '<Control><Alt>v',
     },
     'bridge': {
         # 剪贴板轮询间隔（秒），越小越灵敏、越耗电
@@ -27,6 +30,18 @@ DEFAULTS = {
     'ui': {
         # 列表最多显示多少条
         'limit': '80',
+        # 主题：system（跟随桌面）/ light / dark
+        'theme': 'system',
+        # 关闭窗口时收进托盘而不是退出
+        'close_to_tray': 'true',
+        # 复制成功后自动把窗口收起来
+        'hide_after_copy': 'true',
+        # 启动时直接待在托盘里，不弹窗
+        'start_hidden': 'false',
+        # 复制成功后发系统通知
+        'notify_on_copy': 'true',
+        # 托盘后端：auto / indicator / statusicon
+        'tray_backend': 'auto',
     },
 }
 
@@ -82,21 +97,32 @@ def gui_wake_path():
 # ---------------------------------------------------------------- 配置
 
 _config = None
+_config_mtime = None
 
 
 def config():
-    global _config
-    if _config is not None:
+    """读配置；文件被改过（mtime 变了）就自动重读。
+
+    设置窗口写完文件后，守护进程、热键进程都能立刻看到新值，
+    不用重启它们。
+    """
+    global _config, _config_mtime
+    path = os.path.join(config_home(), 'config.ini')
+    try:
+        mt = os.stat(path).st_mtime
+    except OSError:
+        mt = None
+    if _config is not None and mt == _config_mtime:
         return _config
     cp = configparser.ConfigParser()
     for section, items in DEFAULTS.items():
         cp[section] = dict(items)
-    path = os.path.join(config_home(), 'config.ini')
     try:
         cp.read(path, encoding='utf-8')
     except Exception:
         pass
     _config = cp
+    _config_mtime = mt
     return cp
 
 
@@ -124,6 +150,108 @@ def conf_int(section, key, fallback):
         return int(conf(section, key, str(fallback)))
     except ValueError:
         return fallback
+
+
+def config_file():
+    return os.path.join(config_home(), 'config.ini')
+
+
+def save_conf(updates):
+    """把一批配置写回 config.ini。
+
+    ``updates`` 形如 ``{('ui', 'theme'): 'dark', ...}``。写临时文件再
+    os.replace，避免写到一半断电留下坏文件。写完清缓存，下次 conf() 读新值。
+    """
+    global _config, _config_mtime
+    cp = config()
+    for (section, key), value in updates.items():
+        if not cp.has_section(section):
+            cp.add_section(section)
+        cp.set(section, key, '' if value is None else str(value))
+    path = config_file()
+    _ensure_dir(config_home())
+    tmp = path + '.tmp%d' % os.getpid()
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            cp.write(f)
+        os.replace(tmp, path)
+    except OSError as ex:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise ex
+    _config = None
+    _config_mtime = None
+    return path
+
+
+# ---------------------------------------------------------------- 开机自启
+
+AUTOSTART_NAME = 'wps-clip-bridge.desktop'
+SYSTEM_AUTOSTART = '/etc/xdg/autostart/' + AUTOSTART_NAME
+
+
+def autostart_file():
+    base = os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config')
+    return os.path.join(base, 'autostart', AUTOSTART_NAME)
+
+
+def autostart_enabled():
+    """用户目录里没有覆盖文件 → 用系统的自启项（即已启用）。
+
+    用户目录里写了 ``Hidden=true`` 就是对系统自启项的屏蔽。
+    """
+    p = autostart_file()
+    if os.path.exists(p):
+        try:
+            with open(p, encoding='utf-8') as f:
+                text = f.read()
+        except OSError:
+            text = ''
+        for line in text.splitlines():
+            if line.strip().lower().replace(' ', '') == 'hidden=true':
+                return False
+        return True
+    if os.path.exists(SYSTEM_AUTOSTART):
+        return True
+    return False
+
+
+def set_autostart(on):
+    """勾选开机自启 / 取消勾选，返回最终状态。"""
+    p = autostart_file()
+    _ensure_dir(os.path.dirname(p))
+    if on:
+        # 系统里已经有自启项，删掉用户目录的屏蔽文件即可
+        if os.path.exists(p):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        if not os.path.exists(SYSTEM_AUTOSTART):
+            # 没装包（源码里跑）时自己写一个
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write('[Desktop Entry]\n'
+                        'Type=Application\n'
+                        'Name=WPS 剪贴板服务\n'
+                        'Exec=/usr/bin/wps-clip-bridge-daemon\n'
+                        'Icon=wps-file\n'
+                        'Terminal=false\n'
+                        'NoDisplay=true\n'
+                        'X-GNOME-Autostart-enabled=true\n')
+    else:
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write('[Desktop Entry]\n'
+                    'Type=Application\n'
+                    'Name=WPS 剪贴板服务（已禁用）\n'
+                    'Exec=/usr/bin/wps-clip-bridge-daemon\n'
+                    'Icon=wps-file\n'
+                    'Terminal=false\n'
+                    'NoDisplay=true\n'
+                    'Hidden=true\n'
+                    'X-GNOME-Autostart-enabled=false\n')
+    return autostart_enabled()
 
 
 # ---------------------------------------------------------------- 日志

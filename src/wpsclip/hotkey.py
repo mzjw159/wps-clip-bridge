@@ -1,12 +1,14 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-"""全局热键：按下组合键弹出「WPS 最近文档」窗口。
+"""全局热键：一个键弹出「WPS 最近文档」窗口，另一个键直接复制最近文档。
 
-组合键可配置，`~/.config/wps-clip-bridge/config.ini`::
+两组热键都可配置，`~/.config/wps-clip-bridge/config.ini`::
 
     [hotkey]
     enabled = true
-    combo = <Control><Alt>c
+    combo = <Control><Alt>c          # 唤起窗口
+    copy_enabled = true
+    copy_combo = <Control><Alt>v     # 复制最近一个文档，不弹窗
 
 采用 X11 的 ``grab_key``。WPS、微信、文件管理器都是 XWayland 客户端，
 所以它们在前台时热键有效；Wayland 原生应用（如 GTK4 程序）前台时可能不响应，
@@ -112,17 +114,54 @@ def launch_gui():
         core.log('launch err %r' % (ex,))
 
 
-def main(argv=None):
-    if not core.conf_bool('hotkey', 'enabled', True):
-        core.log('热键已在配置中禁用，退出')
-        return 0
+def bindings():
+    """读出配置里的热键绑定：[(action, combo_text, mask, keyname), ...]。"""
+    out = []
+    if core.conf_bool('hotkey', 'enabled', True):
+        text = core.conf('hotkey', 'combo', '<Control><Alt>c')
+        parsed = parse_combo(text)
+        if parsed:
+            out.append(('gui', text, parsed[0], parsed[1]))
+        else:
+            core.log('唤起窗口的热键无法解析: %r' % text)
+    if core.conf_bool('hotkey', 'copy_enabled', True):
+        text = core.conf('hotkey', 'copy_combo', '<Control><Alt>v')
+        parsed = parse_combo(text)
+        if parsed:
+            out.append(('copy', text, parsed[0], parsed[1]))
+        else:
+            core.log('复制最近文档的热键无法解析: %r' % text)
+    return out
 
-    combo_text = core.conf('hotkey', 'combo', '<Control><Alt>c')
-    parsed = parse_combo(combo_text)
-    if not parsed:
-        core.log('热键配置无法解析: %r' % combo_text)
-        return 1
-    mask, keyname = parsed
+
+def copy_latest():
+    """不开窗口，直接把最近一个文档放进剪贴板。"""
+    from . import recent, service
+    try:
+        rows = recent.parse_recent(limit=1)
+    except Exception as ex:
+        core.log('读取最近文档失败: %r' % (ex,))
+        return False
+    if not rows:
+        core.log('没有最近文档可复制')
+        return False
+    ok, msg = service.request_copy(rows[:1])
+    core.log('热键复制 %s -> %s' % (rows[0], '成功' if ok else msg))
+    return ok
+
+
+def run_action(action):
+    if action == 'copy':
+        copy_latest()
+    else:
+        launch_gui()
+
+
+def main(argv=None):
+    binds = bindings()
+    if not binds:
+        core.log('配置里没有启用任何热键，退出')
+        return 0
 
     si = core.SingleInstance('hotkey')
     if not si.acquire():
@@ -130,16 +169,30 @@ def main(argv=None):
         return 0
 
     d = display.Display(core.conf('bridge', 'display', '') or None)
-    grabbed = grab_all(d, mask, keyname)
-    core.log('热键 %s 已注册 (pid=%d, %d 组修饰状态)'
-             % (combo_text, os.getpid(), len(grabbed)))
-    if not grabbed:
-        core.log('未能抓取到该组合键，可能已被其它程序占用')
+    root = d.screen().root
+
+    handlers = {}        # (keycode, 修饰状态) -> action
+    grabbed_all = []
+    for action, text, mask, keyname in binds:
+        grabbed = grab_all(d, mask, keyname)
+        if not grabbed:
+            core.log('热键 %s 抓取失败，可能已被其它程序占用' % text)
+            continue
+        keysym = XK.string_to_keysym(keyname)
+        keycode = d.keysym_to_keycode(keysym)
+        for kc, m in grabbed:
+            handlers[(kc, m)] = action
+        grabbed_all.extend(grabbed)
+        core.log('热键 %s -> %s 已注册（%d 组修饰状态）'
+                 % (text, action, len(grabbed)))
+
+    if not grabbed_all:
+        core.log('一个热键都没抓到，退出')
         si.release()
         return 1
 
-    last = 0.0
-    root = d.screen().root
+    last = {}
+    mask_bits = X.ControlMask | X.Mod1Mask | X.Mod4Mask | X.ShiftMask
     try:
         while True:
             try:
@@ -149,18 +202,21 @@ def main(argv=None):
                 time.sleep(0.5)
                 continue
             if e.type == X.KeyPress:
-                now = time.time()
-                if now - last < DEBOUNCE:
+                action = handlers.get((e.detail, e.state & mask_bits))
+                if action is None:
                     continue
-                last = now
-                launch_gui()
+                now = time.time()
+                if now - last.get(action, 0.0) < DEBOUNCE:
+                    continue
+                last[action] = now
+                run_action(action)
             elif e.type == X.MappingNotify:
                 # 键盘布局变化后重新抓取
                 try:
                     root.ungrab_key(X.AnyKey, X.AnyModifier)
                 except Exception:
                     pass
-                for kc, m in grabbed:
+                for kc, m in grabbed_all:
                     try:
                         root.grab_key(kc, m, True, X.GrabModeAsync, X.GrabModeAsync)
                     except Exception:

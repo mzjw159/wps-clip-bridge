@@ -1,3 +1,16 @@
+wps-clip-bridge (1.1.0) unstable; urgency=medium
+
+  * 新增设置窗口（标题栏齿轮按钮）：
+    - 两组全局快捷键可视化录入：唤起窗口、复制最近文档。
+    - 主题切换：跟随系统 / 浅色 / 深色。
+    - 关闭窗口收进系统托盘，不退出程序；托盘菜单含显示、复制、设置、退出。
+    - 开机自启勾选（写 ~/.config/autostart 屏蔽项，不改系统文件）。
+    - 复制成功后自动收起窗口、启动时待在托盘、复制成功发通知、列表条数上限。
+  * 关闭窗口/按 Esc 时按配置收进托盘或退出。
+  * wps-copy --status 现在会显示快捷键、主题、托盘与自启状态。
+
+ -- shuai <shuai@localhost>  Thu, 29 Oct 2026 16:45:00 +0800
+
 wps-clip-bridge (1.0.0) unstable; urgency=medium
 
   * 首个版本。

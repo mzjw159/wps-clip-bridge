@@ -123,3 +123,57 @@ def describe(paths):
     if len(paths) == 1:
         return os.path.basename(paths[0])
     return '%s 等 %d 个文件' % (os.path.basename(paths[0]), len(paths))
+
+
+def restart_hotkey():
+    """改完热键配置后重启热键进程，让新组合立即生效。
+
+    先 SIGTERM 旧进程（它自己会释放 X 键盘抓取），再按新配置拉起一个。
+    守护进程那边也会看护，靠单实例锁去重，不会出现两个。
+    """
+    import signal
+
+    pid = _lock_pid('hotkey')
+    if pid is not None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        deadline = time.time() + 3.0
+        while time.time() < deadline and core.is_running('hotkey'):
+            time.sleep(0.05)
+        if core.is_running('hotkey'):
+            try:
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.2)
+            except OSError:
+                pass
+
+    if not core.conf_bool('hotkey', 'enabled', True):
+        return False
+    if core.is_running('daemon'):
+        # 守护进程每秒 tick 一次，会自动按新配置把它拉起来；
+        # 这里再自己起一个只会让两边抢锁、互相把对方踢掉。
+        return True
+    try:
+        out = open(os.path.join(core.state_dir(), 'hotkey.log'), 'ab')
+        subprocess.Popen(exe_for('wps-copy-hotkey', 'wpsclip.hotkey'),
+                         stdin=subprocess.DEVNULL, stdout=out,
+                         stderr=subprocess.STDOUT, start_new_session=True)
+    except Exception as ex:
+        core.log('重启热键进程失败: %r' % (ex,))
+        return False
+    return True
+
+
+def notify(summary, body=''):
+    """发一条桌面通知（notify-send 不存在就静默跳过）。"""
+    try:
+        args = ['notify-send', '-a', 'WPS 最近文档复制',
+                '-i', 'wps-file', '-t', '3000', summary]
+        if body:
+            args.append(body)
+        subprocess.Popen(args, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass

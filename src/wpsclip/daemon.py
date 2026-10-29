@@ -159,6 +159,12 @@ def main(argv=None):
     try:
         while not _stop:
             for c in kids:
+                # 设置里关掉热键后，别再反复把它拉起来（配置改了会自动重读）
+                if c.name == 'hotkey' and not core.conf_bool('hotkey', 'enabled', True):
+                    if c.proc is not None:
+                        core.log('配置禁用了热键，停止该子进程')
+                    c.stop()
+                    continue
                 c.tick()
             time.sleep(1.0)
     finally:

@@ -134,6 +134,19 @@ def cmd_status(_args):
                         ('hotkey', '全局热键'), ('gui', '图形窗口')):
         mark = '运行中' if core.is_running(name) else '未运行'
         print('  %-6s %-10s %s' % (label, name, mark))
+    print('\n快捷键：')
+    from .settings import pretty_combo
+    for enabled, combo, label in (
+            (core.conf_bool('hotkey', 'enabled', True),
+             core.conf('hotkey', 'combo', '<Control><Alt>c'), '唤起窗口'),
+            (core.conf_bool('hotkey', 'copy_enabled', True),
+             core.conf('hotkey', 'copy_combo', '<Control><Alt>v'), '复制最近文档')):
+        print('  %-8s %s%s' % (label, pretty_combo(combo) if enabled else '已禁用',
+                               '' if enabled else ''))
+    print('\n主题：%s   关闭时收进托盘：%s   开机自启：%s'
+          % (core.conf('ui', 'theme', 'system'),
+             '是' if core.conf_bool('ui', 'close_to_tray', True) else '否',
+             '是' if core.autostart_enabled() else '否'))
     print('\n运行期目录：%s' % core.runtime_dir())
     print('日志目录：  %s' % core.state_dir())
     print('配置目录：  %s' % core.config_home())

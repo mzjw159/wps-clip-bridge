@@ -29,7 +29,7 @@ gi.require_version('GdkPixbuf', '2.0')
 gi.require_version('Gio', '2.0')
 from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 
-from . import recent, service  # noqa: E402
+from . import recent, service, settings as settings_mod  # noqa: E402
 
 APP_ID = 'wps-clip-bridge'
 APP_ICON = 'wps-file'
@@ -230,6 +230,9 @@ class App(object):
     def __init__(self):
         self.rows = []
         self.wake_mtime = core.mtime(core.gui_wake_path())
+        self.tray = None
+        self._ticks = 0
+        self._theme_dark = settings_mod.apply_theme()
 
         self.win = Gtk.Window(title='WPS 最近文档')
         self.win.set_default_size(1000, 640)
@@ -256,6 +259,7 @@ class App(object):
         else:
             self.win.set_icon_name(APP_ICON)
         self.win.connect('destroy', Gtk.main_quit)
+        self.win.connect('delete-event', self.on_close_window)
         self.win.connect('key-press-event', self.on_key)
         self._load_css()
 
@@ -265,6 +269,13 @@ class App(object):
         hb.set_title('WPS 最近文档')
         hb.set_subtitle('双击复制 · 右键更多操作')
         self.win.set_titlebar(hb)
+
+        self.settings_btn = Gtk.Button()
+        self.settings_btn.set_image(Gtk.Image.new_from_icon_name(
+            'emblem-system-symbolic', Gtk.IconSize.BUTTON))
+        self.settings_btn.set_tooltip_text('设置（快捷键、主题、托盘、开机启动）')
+        self.settings_btn.connect('clicked', lambda *a: self.open_settings())
+        hb.pack_end(self.settings_btn)
 
         self.refresh_btn = Gtk.Button()
         self.refresh_btn.set_image(Gtk.Image.new_from_icon_name(
@@ -391,9 +402,69 @@ class App(object):
         self.status.get_style_context().add_class('status-label')
         box.pack_start(self.status, False, False, 0)
 
+        self._setup_tray()
         self.reload()
         self.win.show_all()
+        # 配了「启动时待在托盘」就不弹窗，但托盘必须存在，否则窗口无处唤回
+        if core.conf_bool('ui', 'start_hidden', False) and self.tray_available():
+            self.win.hide()
         GLib.timeout_add(WAKE_POLL_MS, self.poll_wake)
+
+    # ------------------------------------------------ 托盘 / 设置
+    def _setup_tray(self):
+        try:
+            from .tray import Tray
+        except Exception as ex:
+            core.log('托盘模块不可用: %r' % (ex,))
+            return
+        t = Tray(on_show=self.show_window,
+                 on_copy=self.copy_latest,
+                 on_settings=self.open_settings,
+                 on_quit=self.quit_app)
+        if t.start():
+            self.tray = t
+
+    def tray_available(self):
+        return self.tray is not None and self.tray.available
+
+    def quit_app(self, *_):
+        try:
+            if self.tray is not None:
+                self.tray.stop()
+        except Exception:
+            pass
+        Gtk.main_quit()
+
+    def show_window(self, *_):
+        try:
+            self.win.deiconify()
+            self.win.show_all()
+            self.win.present()
+        except Exception:
+            pass
+        self.reload()
+
+    def open_settings(self, *_):
+        try:
+            ok = settings_mod.open_settings(self.win)
+        except Exception as ex:
+            self.set_status('打开设置失败：%s' % ex)
+            return
+        if ok:
+            self.reload()
+            self.set_status('设置已保存，快捷键已生效')
+
+    def copy_latest(self, *_):
+        """托盘菜单 / 快捷键用：复制最近一个文档。"""
+        try:
+            paths = recent.parse_recent(limit=1)
+        except Exception as ex:
+            self.set_status('读取最近文档失败：%s' % ex)
+            return
+        if not paths:
+            service.notify('没有最近文档可复制', '先用 WPS 打开一个文档')
+            return
+        self.copy_paths(paths[:1])
 
     # ------------------------------------------------ 样式
     def _load_css(self):
@@ -618,9 +689,21 @@ class App(object):
         if files:
             self.copy_paths(files)
 
+    def on_close_window(self, *_):
+        """点关闭时：配了「收进托盘」且托盘可用就只隐藏。"""
+        if core.conf_bool('ui', 'close_to_tray', True) and self.tray_available():
+            self.win.hide()
+            self.set_status('已收进托盘，快捷键随时唤回')
+            return True
+        self.quit_app()
+        return True
+
     def on_key(self, widget, event):
         if event.keyval == Gdk.KEY_Escape:
-            self.win.destroy()
+            if core.conf_bool('ui', 'close_to_tray', True) and self.tray_available():
+                self.win.hide()
+            else:
+                self.quit_app()
             return True
         if event.keyval == Gdk.KEY_Delete and self.view.is_focus():
             self.on_delete()
@@ -636,6 +719,11 @@ class App(object):
         if cur is not None and cur != self.wake_mtime:
             self.wake_mtime = cur
             self.present()
+        # 「跟随系统」要真的跟着走：约 5 秒看一次桌面明暗有没有变
+        self._ticks += 1
+        if self._ticks % 12 == 0 and core.conf('ui', 'theme', 'system').lower() == 'system':
+            if settings_mod.system_dark() != self._theme_dark:
+                self._theme_dark = settings_mod.apply_theme()
         return True
 
     def present(self):
@@ -655,11 +743,25 @@ class App(object):
         while Gtk.events_pending():
             Gtk.main_iteration_do(False)
         ok, msg = service.request_copy(paths)
-        if ok:
-            self.set_status('✔ 已复制：%s —— 切到桌面或微信按 Ctrl+V'
-                            % service.describe(paths))
-        else:
+        self._after_copy(ok, msg, paths)
+
+    def _after_copy(self, ok, msg, paths):
+        if not ok:
             self.set_status('✘ %s' % msg)
+            if not self.win.get_visible():
+                service.notify('复制失败', msg)
+            return
+        brief = service.describe(paths)
+        self.set_status('✔ 已复制：%s —— 切到桌面或微信按 Ctrl+V' % brief)
+        if core.conf_bool('ui', 'notify_on_copy', True):
+            service.notify('已复制 %s' % brief, '切到桌面或微信按 Ctrl+V 即可粘贴')
+        if core.conf_bool('ui', 'hide_after_copy', True) and self.win.get_visible():
+            GLib.timeout_add(220, self._hide_if_visible)
+
+    def _hide_if_visible(self):
+        if self.win.get_visible():
+            self.win.hide()
+        return False
 
 
 def main(argv=None):
