@@ -31,7 +31,8 @@ CLIPBOARD 持有者：Qt Selection Owner for wpsoffice
 
 ## 安装
 
-三种方式都行，效果一样：
+从 [Releases](https://github.com/mzjw159/wps-clip-bridge/releases) 下载最新的
+`wps-clip-bridge_x.y.z_all.deb`（同时提供 `SHA256SUMS` 校验），然后三种方式任选：
 
 ```sh
 sudo apt install ./dist/wps-clip-bridge_1.5.0_all.deb   # 命令行
