@@ -61,6 +61,7 @@ CSS = b"""
 .toolbar { padding: 10px 12px 2px 12px; }
 .bottom-bar { padding: 8px 2px 0 2px; }
 .status-label { opacity: 0.72; font-size: 92%; }
+.empty-hint { opacity: 0.62; font-size: 95%; }
 headerbar .title { font-weight: 600; }
 """
 
@@ -381,7 +382,20 @@ class App(object):
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroll.set_shadow_type(Gtk.ShadowType.IN)
         scroll.add(view)
-        box.pack_start(scroll, True, True, 0)
+
+        # 空列表时在中间给一句人话（放状态栏里会被 ellipsize 截掉，看不清）
+        self.empty_hint = Gtk.Label()
+        self.empty_hint.set_line_wrap(True)
+        self.empty_hint.set_max_width_chars(44)
+        self.empty_hint.set_justify(Gtk.Justification.CENTER)
+        self.empty_hint.set_xalign(0.5)
+        self.empty_hint.get_style_context().add_class('empty-hint')
+        self.empty_hint.set_no_show_all(True)
+        overlay = Gtk.Overlay()
+        overlay.add(scroll)
+        overlay.add_overlay(self.empty_hint)
+        overlay.set_overlay_pass_through(self.empty_hint, True)
+        box.pack_start(overlay, True, True, 0)
 
         # 底部操作栏
         bottom = Gtk.Box(spacing=8)
@@ -601,15 +615,28 @@ class App(object):
             self.set_status('共 %d 个文档 · 双击复制、拖到微信，Ctrl/Shift 可多选'
                             % total)
             self.status.set_tooltip_text(None)
+            self._show_empty_hint('')
         elif kw:
             self.set_status('没有匹配「%s」的文档' % kw)
             self.status.set_tooltip_text(None)
+            self._show_empty_hint('没有匹配「%s」的文档\n换个关键词，或清空搜索框' % kw)
         else:
             # 列表空的三种原因（没装 WPS / 格式变了 / 文件被删）要分清，
             # 否则用户只看到一句「没读到最近文档」，不知道该找谁。
             info = recent.diagnose()
-            self.set_status(info['hint'])
+            self.set_status('没读到最近文档 —— 原因见中间的提示')
             self.status.set_tooltip_text(self._diagnose_detail(info))
+            self._show_empty_hint('%s\n\n详细自检：wps-copy --doctor' % info['hint'])
+
+    def _show_empty_hint(self, text):
+        try:
+            if text:
+                self.empty_hint.set_text(text)
+                self.empty_hint.show()
+            else:
+                self.empty_hint.hide()
+        except Exception:
+            pass
 
     def on_search(self, *_):
         self.reload()
