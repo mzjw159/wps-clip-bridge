@@ -12,7 +12,7 @@ import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {
@@ -360,6 +360,24 @@ def mtime(path):
         return os.stat(path).st_mtime
     except OSError:
         return None
+
+
+# 请求文件超过这个岁数就算「上一轮遗留」，启动时不执行
+STALE_REQUEST_SECONDS = 60.0
+
+
+def request_is_stale(mt, now=None, stale=STALE_REQUEST_SECONDS):
+    """判断请求文件是不是上一轮遗留的。
+
+    bridge 启动时用：旧请求别再执行一遍（否则一登录就把上次复制的文件
+    又塞回剪贴板）；但**刚刚**写下的请求必须照办 —— 冷启动时界面可能比
+    bridge 初始化更早写下请求，把它当历史忽略，表现就是「第一次复制没反应」。
+    """
+    if mt is None:
+        return False
+    if now is None:
+        now = time.time()
+    return (now - mt) > stale
 
 
 # ---------------------------------------------------------------- 剪贴板读取

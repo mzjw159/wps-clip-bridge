@@ -90,6 +90,10 @@ wps-copy --gui
 
 分组标题（今天 / 昨天 / …）只是分隔，不参与选中，`Ctrl+A` 也不会把它们算进去。
 
+**复制是在后台线程里做的**，点下去界面不会僵住：状态栏左边会转一个小进度圈，
+按钮暂时变成「正在复制…」，期间你照样能搜索、改选、折叠分组。连点几次也没问题
+——只有最后一次的结果会显示出来，慢的那次不会回来把状态盖掉。
+
 标题栏右上角的 **齿轮按钮** 打开设置窗口（详见下面「设置」一节）。
 
 ### 3. 命令行
@@ -219,17 +223,19 @@ python3 -m wpsclip.daemon        # 看护进程（依次拉起 bridge + hotkey�
 
 ### 跑测试
 
-纯函数部分有单元测试，不需要图形界面，也不碰你的真实配置
-（每个用例都在临时目录里跑）：
+纯函数部分有单元测试（`tests/`，107 个用例），不需要图形界面，也不碰你的
+真实配置（每个用例都在临时目录里跑）：
 
 ```sh
-python3 -m unittest discover -s tests          # 全跑，约 0.3 秒
+python3 -m unittest discover -s tests          # 全跑，约 1 秒
 python3 -m unittest discover -s tests -v       # 逐个用例
 python3 -m unittest tests.test_recent -v       # 只跑解析层
+python3 -m unittest tests.test_service -v      # 只跑复制编排
 ```
 
 覆盖 `unesc()` 的「2~4 位十六进制」边界、`parse_uris()` 的百分号解码、
-`bucket_of()` 的时间分桶、配置的 mtime 热重载、开机自启开关等。
+`bucket_of()` 的时间分桶、配置的 mtime 热重载、开机自启开关，以及复制链路
+的路径整理、请求发布、等待确认和异步回调（不需要 X 连接）。
 
 > 动 `recent.py` 的解析规则之前先读 `tests/test_recent.py`：
 > 里面每条用例都对应一个真实踩过的坑，改坏了会立刻红。
@@ -274,15 +280,16 @@ wps-clip-bridge/
 │   ├── core.py              路径、配置、日志、单实例锁、剪贴板读取
 │   ├── recent.py            解析 WPS 的 Office.conf
 │   ├── bridge.py            常驻剪贴板服务
-│   ├── service.py           服务编排：确保在跑、发起复制、确认结果
+│   ├── service.py           服务编排：确保在跑、异步复制、确认结果
 │   ├── cli.py               命令行 wps-copy
 │   ├── gui.py               图形窗口 wps-copy-gui
 │   ├── hotkey.py            全局热键 wps-copy-hotkey
 │   └── daemon.py            看护进程 wps-clip-bridge-daemon
 ├── bin/                     5 个可执行入口（薄壳，转手给上面的模块）
 ├── data/                    菜单项、自启项、图标、man page
+├── tests/                   单元测试（不需要图形环境）
 ├── debian/                  control、维护脚本、copyright、changelog
-├── dist/                    打包产物（已放 1.0.0）
+├── dist/                    打包产物（已放 1.3.0）
 ├── build/                   构建中间目录，每次构建重建，可随时删
 ├── build.sh
 └── .gitignore
@@ -340,6 +347,18 @@ flock 是内核级互斥，不会误判。
 登录自启不提供崩溃重启，所以 `daemon` 负责看护 `bridge` 和 `hotkey`，
 子进程异常退出就重启，连续崩溃则指数退避（2s → 30s），免得刷日志烧 CPU。
 它还负责在启动前等 X 就绪 —— 登录自启可能比合成器更早执行。
+
+**为什么复制要放到后台线程？**
+
+复制不是一个纯本地动作：它要先确认剪贴板服务在跑（必要时拉起守护进程，
+冷启动可能要一两秒），再写请求文件、等 `published` 时间戳变化。整条链路
+最长要几秒，而 GTK 主循环被占住时窗口连重绘都做不了——表现就是「点一下
+界面灰掉、鼠标转圈」。
+
+所以 `service.request_copy()` 只负责**同步**语义（命令行、热键进程直接用它，
+阻塞一下无所谓），界面走 `service.copy_async()`：工作线程里跑完整条链路，
+结果用 `GLib.idle_add` 回到主线程再碰控件。界面侧再用一个自增序号作废旧
+回调——连续点两次时，先发后到的结果会被丢掉，状态栏只反映最后一次。
 
 **为什么读 `Office.conf` 而不是调 WPS 的接口？**
 

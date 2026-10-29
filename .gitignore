@@ -10,3 +10,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+
+# 本地调试：截图、测试脚本、项目记忆（不进仓库）
+/.workbuddy/
+/.Trash-0/

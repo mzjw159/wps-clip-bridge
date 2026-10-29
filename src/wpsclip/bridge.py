@@ -69,8 +69,11 @@ class Bridge(object):
         self.last_scan_ts = 0.0
         self.is_owner = False
 
-        # 启动时忽略历史请求，避免把上次复制的文件又塞回剪贴板
-        self.req_mtime = core.mtime(core.req_path())
+        # 启动时只忽略「上一轮遗留」的旧请求（>60 秒），刚刚写下的必须处理：
+        # 冷启动时界面/命令行可能比 bridge 初始化更早写入请求文件，若把它
+        # 当成历史忽略，第一次复制就永远等不到 published（表现为「没反应」）。
+        _mt = core.mtime(core.req_path())
+        self.req_mtime = _mt if core.request_is_stale(_mt) else None
 
     # ------------------------------------------------ 读取别人的 selection
     def fetch_prop(self, target, timeout=0.6):

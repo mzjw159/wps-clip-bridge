@@ -1,3 +1,23 @@
+wps-clip-bridge (1.3.0) unstable; urgency=medium
+
+  * 复制链路改为后台线程执行，点一下不再卡三秒：
+    - 界面侧 copy_paths 立刻返回，拉起后台、写入剪贴板、等待确认全在
+      工作线程里做，GTK 主循环始终能重绘和响应点击。
+    - 状态栏加进度圈，按钮在复制期间显示「正在复制…」并禁用，避免连点。
+    - 连续复制时用请求序号作废旧回调，慢的那次结果不会覆盖新结果。
+  * 复制入口统一走异步链路：双击、按钮、右键、拖拽、浏览本地文件、
+    托盘「复制最近文档」都一样不阻塞。
+  * 冷启动更耐心：剪贴板桥没在跑时最多等 8 秒（原来 3 秒），慢机器上
+    第一次复制不再直接报「后台没有响应」；界面启动后自动预热后台。
+  * 修复「装好/重启后第一次复制必定失败」：bridge 启动时原先把现成的
+    copy-request 一律当历史忽略，而冷启动时请求往往比它初始化更早写下，
+    于是永远等不到 published。现在只忽略超过 60 秒的遗留请求。
+  * service.py 拆出可测的 prepare / publish / wait_published / copy_async /
+    warmup，新增 tests/test_service.py（18 个用例，不需要 X）；core.py 加
+    request_is_stale()，连同其它用例共 113 个。
+
+ -- shuai <shuai@localhost>  Thu, 29 Oct 2026 17:40:00 +0800
+
 wps-clip-bridge (1.2.0) unstable; urgency=medium
 
   * 列表支持多选与拖拽：

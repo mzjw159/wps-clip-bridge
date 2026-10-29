@@ -155,5 +155,43 @@ class PathTest(_TmpHome):
         self.assertTrue(core.lock_path('bridge').endswith('bridge.lock'))
 
 
+class StaleRequestTest(_TmpHome):
+    """bridge 启动时要不要执行现成的请求文件。
+
+    判定错了有两个方向的症状：太宽松 -> 一登录就把上次复制的文件又塞回
+    剪贴板；太严格 -> 冷启动时先写下的请求被忽略，第一次复制「没反应」。
+    """
+
+    def test_missing_file_is_not_stale(self):
+        self.assertFalse(core.request_is_stale(None))
+
+    def test_fresh_request_is_executed(self):
+        now = 1_000_000.0
+        self.assertFalse(core.request_is_stale(now - 2, now=now))
+        self.assertFalse(core.request_is_stale(now, now=now))
+
+    def test_old_request_is_ignored(self):
+        now = 1_000_000.0
+        self.assertTrue(core.request_is_stale(now - 61, now=now))
+        self.assertTrue(core.request_is_stale(now - 86400, now=now))
+
+    def test_boundary_uses_default_60s(self):
+        now = 1_000_000.0
+        self.assertFalse(core.request_is_stale(now - 59.9, now=now))
+        self.assertTrue(core.request_is_stale(now - 60.1, now=now))
+
+    def test_custom_window(self):
+        now = 1_000_000.0
+        self.assertTrue(core.request_is_stale(now - 6, now=now, stale=5))
+        self.assertFalse(core.request_is_stale(now - 4, now=now, stale=5))
+
+    def test_real_file_mtime(self):
+        p = os.path.join(self.tmp, 'copy-request')
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write('/tmp/a\n')
+        self.assertFalse(core.request_is_stale(core.mtime(p)))
+        self.assertTrue(core.request_is_stale(core.mtime(p), now=time.time() + 3600))
+
+
 if __name__ == '__main__':
     unittest.main()

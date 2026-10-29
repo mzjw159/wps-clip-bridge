@@ -16,6 +16,7 @@
 import datetime
 import os
 import sys
+import threading
 
 os.environ.setdefault('GDK_BACKEND', 'x11')
 
@@ -232,6 +233,8 @@ class App(object):
         self.wake_mtime = core.mtime(core.gui_wake_path())
         self.tray = None
         self._ticks = 0
+        self._copy_seq = 0          # 复制请求序号，用来作废过期回调
+        self._copy_busy = False
         self._theme_dark = settings_mod.apply_theme()
 
         self.win = Gtk.Window(title='WPS 最近文档')
@@ -407,7 +410,14 @@ class App(object):
         self.status.set_xalign(0)
         self.status.set_ellipsize(3)
         self.status.get_style_context().add_class('status-label')
-        box.pack_start(self.status, False, False, 0)
+        statusbar = Gtk.Box(spacing=6)
+        # 复制进度圈：只在后台忙的时候显示（set_no_show_all 防 show_all 把它带出来）
+        self.spinner = Gtk.Spinner()
+        self.spinner.set_no_show_all(True)
+        self.spinner.set_tooltip_text('后台正在处理')
+        statusbar.pack_start(self.spinner, False, False, 0)
+        statusbar.pack_start(self.status, True, True, 0)
+        box.pack_start(statusbar, False, False, 0)
 
         self._setup_tray()
         self.reload()
@@ -416,6 +426,14 @@ class App(object):
         if core.conf_bool('ui', 'start_hidden', False) and self.tray_available():
             self.win.hide()
         GLib.timeout_add(WAKE_POLL_MS, self.poll_wake)
+        # 顺手把后台服务预热起来：第一次复制不用再等它冷启动
+        GLib.timeout_add(400, self._warmup)
+
+    def _warmup(self):
+        def work():
+            service.warmup()
+        threading.Thread(target=work, name='wps-warmup', daemon=True).start()
+        return False
 
     # ------------------------------------------------ 托盘 / 设置
     def _setup_tray(self):
@@ -603,8 +621,12 @@ class App(object):
 
     def on_select(self, sel):
         n = len(self.selected_paths())
-        self.copy_btn.set_sensitive(n > 0)
-        self.copy_btn.set_label('复制选中文件' if n <= 1 else '复制 %d 个文件' % n)
+        if self._copy_busy:
+            # 复制进行中别把按钮重新点亮，等结果回来再恢复
+            self.copy_btn.set_sensitive(False)
+        else:
+            self.copy_btn.set_sensitive(n > 0)
+            self.copy_btn.set_label('复制选中文件' if n <= 1 else '复制 %d 个文件' % n)
         if n:
             self.set_status('已选 %d 个 · 双击复制，也可以直接拖到微信窗口' % n)
 
@@ -863,15 +885,64 @@ class App(object):
 
     # ------------------------------------------------ 复制
     def copy_paths(self, paths):
+        """把文件放进剪贴板。
+
+        实际动作（必要时拉起后台、写入、等确认）最多要几秒，全部丢给
+        service.copy_async 在后台线程里做，主线程只更新状态，界面不再假死。
+        """
         paths = [p for p in paths if os.path.isfile(p)]
         if not paths:
             self.set_status('没有可复制的文件')
             return
+        # 用序号作废过期的结果：连续点两次时，慢的那次的回调不会覆盖新结果
+        self._copy_seq += 1
+        seq = self._copy_seq
+        self._copy_busy = True
+        self._update_busy()
         self.set_status('正在复制…')
-        while Gtk.events_pending():
-            Gtk.main_iteration_do(False)
-        ok, msg = service.request_copy(paths)
+
+        def stage(text):
+            GLib.idle_add(self._copy_stage, seq, text)
+
+        def done(ok, msg, norm):
+            GLib.idle_add(self._copy_done, seq, ok, msg, norm)
+
+        service.copy_async(paths, done, stage)
+
+    def _copy_stage(self, seq, text):
+        """后台线程报进度（工作线程里发来，这里已在主线程）。"""
+        if seq == self._copy_seq:
+            self.set_status(text)
+        return False
+
+    def _copy_done(self, seq, ok, msg, paths):
+        if seq != self._copy_seq:
+            return False                    # 结果过期，已经有更新的复制在跑
+        self._copy_busy = False
+        self._update_busy()
         self._after_copy(ok, msg, paths)
+        return False
+
+    def _update_busy(self):
+        busy = self._copy_busy
+        n = len(self.selected_paths())
+        if busy:
+            label = '正在复制…'
+        elif n <= 1:
+            label = '复制选中文件'
+        else:
+            label = '复制 %d 个文件' % n
+        self.copy_btn.set_label(label)
+        self.copy_btn.set_sensitive((not busy) and n > 0)
+        try:
+            if busy:
+                self.spinner.show()
+                self.spinner.start()
+            else:
+                self.spinner.stop()
+                self.spinner.hide()
+        except Exception:
+            pass
 
     def _after_copy(self, ok, msg, paths):
         if not ok:
