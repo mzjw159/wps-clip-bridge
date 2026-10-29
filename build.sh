@@ -59,6 +59,30 @@ for sz in 48 64 128 256 512; do
     install -m 644 "$src" "$R/usr/share/icons/hicolor/${sz}x${sz}/apps/"
 done
 
+# 别名：同一套图标再以「包名」wps-clip-bridge 装一份。
+# 麒麟安装器/软件中心是按包名/desktop 名去图标主题里查的
+# （QIcon::fromTheme(<名字>)），只装 wps-file 时按包名一查就落空，
+# 只能显示系统的通用/齿轮图标。两个名字都装，两条查找路径都能命中。
+for sz in 48 64 128 256 512; do
+    install -m 644 "$DATA/icons/hicolor/${sz}x${sz}/apps/wps-file.png" \
+        "$R/usr/share/icons/hicolor/${sz}x${sz}/apps/wps-clip-bridge.png"
+done
+install -m 644 "$DATA/wps-file.svg" \
+    "$R/usr/share/icons/hicolor/scalable/apps/wps-clip-bridge.svg"
+
+# /usr/share/pixmaps：只认 pixmaps 的老面板、以及部分安装器会兜底查这里
+install -d -m 755 "$R/usr/share/pixmaps"
+install -m 644 "$DATA/icons/hicolor/256x256/apps/wps-file.png" "$R/usr/share/pixmaps/wps-file.png"
+install -m 644 "$DATA/icons/hicolor/256x256/apps/wps-file.png" "$R/usr/share/pixmaps/wps-clip-bridge.png"
+install -m 644 "$DATA/wps-file.svg" "$R/usr/share/pixmaps/wps-file.svg"
+
+# AppStream 元数据：软件中心/应用商店类前端靠它认领图标与名称
+if [ -f "$DATA/wps-clip-bridge.metainfo.xml" ]; then
+    install -d -m 755 "$R/usr/share/metainfo"
+    install -m 644 "$DATA/wps-clip-bridge.metainfo.xml" \
+        "$R/usr/share/metainfo/wps-clip-bridge.metainfo.xml"
+fi
+
 echo "==> 安装开机自启项"
 install -d -m 755 "$R/etc/xdg/autostart"
 install -m 644 "$DATA/wps-clip-bridge-autostart.desktop" \

@@ -31,6 +31,21 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 
 from . import recent, service  # noqa: E402
 
+APP_ID = 'wps-clip-bridge'
+APP_ICON = 'wps-file'
+
+# 必须尽早设置进程名与程序类：
+# WM_CLASS 由 GDK 在窗口 create 时用 g_get_prgname()/gdk_get_program_class()
+# 生成，而这两个值默认取自 argv[0] 的 basename —— 我们是被 python3 启动的
+# 脚本，于是 WM_CLASS 变成 "python3"，面板/任务栏就去找系统里现成的
+# python3 图标来显示（ukui 主题里真有 python3.0.png），所以「托盘里是个
+# Python 图标」。在这里（GTK 尚未创建任何窗口前）改成应用 ID 即可根治。
+GLib.set_prgname(APP_ID)
+try:
+    Gdk.set_program_class(APP_ID)   # 3.16 起标记弃用，但仍是改 WM_CLASS 类名的唯一途径
+except Exception:
+    pass
+
 WAKE_POLL_MS = 400
 
 # TreeStore 列索引
@@ -125,34 +140,90 @@ def when_str(mt):
     return dt.strftime('%Y-%m-%d')
 
 
-def _load_app_icon():
-    """加载应用图标：优先主题名，其次按安装路径/源码路径直接读文件。
+# 图标可能被装到的地方：hicolor 各尺寸、pixmaps（部分面板/安装器只认这里）
+_ICON_DIRS = (
+    '/usr/share/icons/hicolor/scalable/apps',
+    '/usr/share/icons/hicolor/512x512/apps',
+    '/usr/share/icons/hicolor/256x256/apps',
+    '/usr/share/icons/hicolor/128x128/apps',
+    '/usr/share/icons/hicolor/64x64/apps',
+    '/usr/share/icons/hicolor/48x48/apps',
+    '/usr/share/pixmaps',
+    '/usr/share/kylin-software-center/data/icons',
+)
 
-    历史 bug：图标名曾为 wps-clip-bridge，换成 wps-file 后这里没同步，
-    导致窗口/任务栏/托盘显示默认图标。多级回退保证装到哪儿都正确。
+
+def _icon_files():
+    """按优先级列出所有候选图标文件（含源码目录，便于未安装时调试）。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    out = []
+    for d in _ICON_DIRS:
+        for name in (APP_ICON, APP_ID):
+            for ext in ('.svg', '.png'):
+                out.append(os.path.join(d, name + ext))
+    out.append(os.path.join(here, '..', '..', 'data', 'wps-file.svg'))
+    out.append(os.path.join(here, '..', '..', 'data', 'wps-file.png'))
+    return out
+
+
+def _icon_pixbufs(sizes=(16, 24, 32, 48, 64, 128)):
+    """按多个小尺寸生成窗口图标 pixbuf 列表。
+
+    ⚠ 关键坑：GDK 往 _NET_WM_ICON 写图标时有尺寸上限，实测 256×256 会
+    写成空属性（xprop 里 _NET_WM_ICON 为空），面板取不到窗口图标，就会
+    退回按 WM_CLASS 去图标主题里找 —— 于是显示成 python 图标。
+    所以这里只用 ≤128 的尺寸，并一次给多个，让面板按需挑。
     """
+    theme = None
     try:
         theme = Gtk.IconTheme.get_default()
-        if theme.has_icon('wps-file'):
-            return theme.load_icon('wps-file', 128, 0)
     except Exception:
         pass
-    here = os.path.dirname(os.path.abspath(__file__))
-    for p in (
-        '/usr/share/icons/hicolor/scalable/apps/wps-file.svg',
-        '/usr/share/icons/hicolor/256x256/apps/wps-file.png',
-        '/usr/share/icons/hicolor/128x128/apps/wps-file.png',
-        '/usr/share/icons/hicolor/64x64/apps/wps-file.png',
-        '/usr/share/icons/hicolor/48x48/apps/wps-file.png',
-        os.path.join(here, '..', '..', 'data', 'wps-file.svg'),
-        os.path.join(here, '..', '..', 'data', 'wps-file.png'),
-    ):
+    out = []
+    for sz in sizes:
+        pb = None
+        if theme is not None:
+            for name in (APP_ICON, APP_ID):
+                try:
+                    if theme.has_icon(name):
+                        pb = theme.load_icon(name, sz, 0)
+                        if pb is not None:
+                            break
+                except Exception:
+                    pb = None
+        if pb is None:
+            for p in _icon_files():
+                if not os.path.exists(p):
+                    continue
+                try:
+                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(p, sz, sz, True)
+                    break
+                except Exception:
+                    continue
+        if pb is not None:
+            out.append(pb)
+    return out
+
+
+def _load_app_icon(size=128):
+    """取单个应用图标 pixbuf（尺寸不要超过 128，原因见 _icon_pixbufs）。"""
+    pbs = _icon_pixbufs((size,))
+    return pbs[0] if pbs else None
+
+
+def _install_default_icon():
+    """设置 GTK 全局默认窗口图标（含对话框、文件选择器）。
+
+    只设主窗口的图标不够：消息框/文件选择器是独立窗口，未单独设置时面板
+    会用 WM_CLASS 去主题里找，又退回 python 图标。设默认列表一劳永逸。
+    """
+    pbs = _icon_pixbufs()
+    if pbs:
         try:
-            if os.path.exists(p):
-                return GdkPixbuf.Pixbuf.new_from_file(p)
+            Gtk.Window.set_default_icon_list(pbs)
         except Exception:
-            continue
-    return None
+            pass
+    return pbs
 
 
 class App(object):
@@ -163,11 +234,27 @@ class App(object):
         self.win = Gtk.Window(title='WPS 最近文档')
         self.win.set_default_size(1000, 640)
         self.win.get_style_context().add_class('wps-window')
-        _icon = _load_app_icon()
+        # WM_CLASS 显式指定（必须在 realize/show 之前）：
+        # 桌面环境靠 WM_CLASS 或 StartupWMClass 把运行中的窗口关联到
+        # .desktop，从而取到 Icon= 里的自定义图标。留空则退回 python3 图标。
+        try:
+            self.win.set_wmclass(APP_ID, APP_ID)
+        except Exception:
+            pass
+        try:
+            self.win.set_role(APP_ID)
+        except Exception:
+            pass
+        _icon = _load_app_icon(128)
         if _icon is not None:
-            self.win.set_icon(_icon)
+            # 多尺寸一起给：面板/任务栏会挑最合适的那个，避免缩放糊
+            _pbs = _icon_pixbufs()
+            try:
+                self.win.set_icon_list(_pbs or [_icon])
+            except Exception:
+                self.win.set_icon(_icon)
         else:
-            self.win.set_icon_name('wps-file')
+            self.win.set_icon_name(APP_ICON)
         self.win.connect('destroy', Gtk.main_quit)
         self.win.connect('key-press-event', self.on_key)
         self._load_css()
@@ -576,9 +663,10 @@ class App(object):
 
 
 def main(argv=None):
-    # 让窗口 WM_CLASS 与 .desktop 文件名一致，桌面环境才能把运行中的窗口
-    # 关联到应用图标（否则任务栏/托盘里显示的是默认图标）
-    GLib.set_prgname('wps-clip-bridge')
+    # 进程名 / WM_CLASS 已在模块导入时设置好（见文件顶部），这里只需在所有
+    # 窗口创建前装好全局默认图标，保证消息框、文件选择器这些独立窗口
+    # 也显示自定义图标，而不是被面板按 WM_CLASS 兜底成 python 图标。
+    _install_default_icon()
     si = core.SingleInstance('gui')
     if not si.acquire():
         # 已有窗口在跑，唤醒它

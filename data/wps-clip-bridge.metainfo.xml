@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>wps-clip-bridge.desktop</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>WPS 最近文档复制</name>
+  <name xml:lang="en">WPS Recent Documents Copy</name>
+  <summary>把 WPS 最近文档直接放进剪贴板</summary>
+  <summary xml:lang="en">Put a WPS recent document on the clipboard</summary>
+  <description>
+    <p>
+      WPS for Linux 的「复制」只声明剪贴板所有权、不写入数据，导致在桌面或微信里
+      粘贴不出来。本工具绕开该限制：读取 WPS 自己的最近文档记录，直接以文件形式
+      写入剪贴板，支持多选、全局热键与图形界面。
+    </p>
+  </description>
+  <launchable type="desktop-id">wps-clip-bridge.desktop</launchable>
+  <icon type="stock">wps-file</icon>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <url type="homepage">https://github.com/mzjw159/wps-clip-bridge</url>
+  <content_rating type="oars-1.1"/>
+</component>

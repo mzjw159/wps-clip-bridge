@@ -237,10 +237,18 @@ wps-clip-bridge/
 /usr/bin/wps-clip-bridge-daemon      后台守护（自启的就是它）
 /usr/lib/python3/dist-packages/wpsclip/
 /usr/share/applications/wps-clip-bridge.desktop
-/usr/share/icons/hicolor/scalable/apps/wps-file.svg
+/usr/share/icons/hicolor/{48x48,64x64,128x128,256x256,512x512,scalable}/apps/wps-file.*
+/usr/share/icons/hicolor/{...}/apps/wps-clip-bridge.*   同上图标，按包名的别名
+/usr/share/pixmaps/wps-file.{png,svg}                   只认 pixmaps 的老面板
+/usr/share/metainfo/wps-clip-bridge.metainfo.xml        AppStream 元数据
 /usr/share/man/man1/wps-copy.1.gz
 /etc/xdg/autostart/wps-clip-bridge.desktop
 ```
+
+图标为什么装两份、还放 pixmaps：不同组件查图标的方式不一样 —— 桌面环境按
+`.desktop` 的 `Icon=wps-file` 查主题、麒麟安装器/软件中心按**包名**
+（`wps-clip-bridge`）查 `QIcon::fromTheme()`、个别老面板只扫 `/usr/share/pixmaps`。
+同一套图标按这几个名字/目录各放一份，才能都命中，否则会显示成系统通用图标。
 
 运行期文件走 XDG，不写死家目录：
 
