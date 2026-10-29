@@ -17,6 +17,10 @@ from . import core, service  # noqa: E402
 
 THEMES = (('system', '跟随系统'), ('light', '浅色'), ('dark', '深色'))
 
+# 项目官网（设置窗口底部会渲染成可点的链接）
+SITE_URL = 'https://www.gwbbm.cn'
+SITE_TEXT = 'www.gwbbm.cn'
+
 MOD_BITS = (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK
             | Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.SUPER_MASK
             | Gdk.ModifierType.MOD4_MASK)
@@ -249,7 +253,7 @@ class SettingsDialog(Gtk.Dialog):
         self.copy_enabled = Gtk.CheckButton(label='启用')
         self.copy_enabled.set_active(core.conf_bool('hotkey', 'copy_enabled', True))
         self.btn_copy_combo = HotkeyButton(
-            core.conf('hotkey', 'copy_combo', '<Control><Alt>v'))
+            core.conf('hotkey', 'copy_combo', '<Control><Shift>c'))
         row = Gtk.Box(spacing=8)
         row.pack_start(self.btn_copy_combo, False, False, 0)
         row.pack_start(self.copy_enabled, False, False, 0)
@@ -307,6 +311,22 @@ class SettingsDialog(Gtk.Dialog):
         self.chk_notify = Gtk.CheckButton(label='复制成功后发送桌面通知')
         self.chk_notify.set_active(core.conf_bool('ui', 'notify_on_copy', True))
         vbox.pack_start(self.chk_notify, False, False, 0)
+
+        # 托盘图标样式：StatusNotifier 协议里，面板对左键的处理一律是弹菜单
+        # （程序没法改），«点一下图标就显示窗口» 只有经典图标能做到。留个开关。
+        row_backend = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row_backend.pack_start(self._label('托盘图标样式'), False, False, 0)
+        self.cmb_backend = Gtk.ComboBoxText()
+        for key, text in (('auto', '自动（推荐）'),
+                          ('indicator', '跟随面板（左键弹菜单）'),
+                          ('statusicon', '经典图标（点一下即显示窗口）')):
+            self.cmb_backend.append(key, text)
+        cur_backend = core.conf('ui', 'tray_backend', 'auto').strip().lower()
+        self.cmb_backend.set_active_id(
+            cur_backend if cur_backend in ('auto', 'indicator', 'statusicon')
+            else 'auto')
+        row_backend.pack_start(self.cmb_backend, False, False, 0)
+        vbox.pack_start(row_backend, False, False, 0)
         box.pack_start(vbox, False, False, 0)
 
         # ---- 启动
@@ -315,6 +335,37 @@ class SettingsDialog(Gtk.Dialog):
         self.chk_autostart.set_active(core.autostart_enabled())
         self.chk_autostart.set_margin_start(12)
         box.pack_start(self.chk_autostart, False, False, 0)
+
+        # ---- 关于
+        box.pack_start(self._section('关于'), False, False, 0)
+        about = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        about.set_margin_start(12)
+
+        made = Gtk.Label()
+        made.set_markup('<b>公文帮帮忙</b> 出品')
+        made.set_xalign(0)
+        about.pack_start(made, False, False, 0)
+
+        ver = Gtk.Label(label='WPS 最近文档复制  v%s' % core.VERSION)
+        ver.set_xalign(0)
+        ver.get_style_context().add_class('dim-label')
+        about.pack_start(ver, False, False, 0)
+
+        # 真链接而不是纯文字：Gtk.LinkButton 点一下就用默认浏览器打开
+        site = Gtk.LinkButton.new_with_label(SITE_URL, '官网  ' + SITE_TEXT)
+        site.set_halign(Gtk.Align.START)
+        site.set_tooltip_text(SITE_URL)
+        about.pack_start(site, False, False, 0)
+
+        tip = Gtk.Label(label='把 WPS 里的最近文档变成能直接粘贴的文件，'
+                              '省掉翻文件夹那一步。\n用着不顺手、想要什么功能，'
+                              '都欢迎到官网找我们。')
+        tip.set_xalign(0)
+        tip.set_line_wrap(True)
+        tip.set_margin_top(4)
+        tip.get_style_context().add_class('dim-label')
+        about.pack_start(tip, False, False, 0)
+        box.pack_start(about, False, False, 0)
 
         self.error = Gtk.Label()
         self.error.set_xalign(0)
@@ -351,6 +402,7 @@ class SettingsDialog(Gtk.Dialog):
             'hide_after_copy': self.chk_hide_after.get_active(),
             'start_hidden': self.chk_start_hidden.get_active(),
             'notify_on_copy': self.chk_notify.get_active(),
+            'tray_backend': self.cmb_backend.get_active_id() or 'auto',
             'autostart': self.chk_autostart.get_active(),
         }
 
@@ -383,9 +435,17 @@ class SettingsDialog(Gtk.Dialog):
             ('ui', 'hide_after_copy'): 'true' if v['hide_after_copy'] else 'false',
             ('ui', 'start_hidden'): 'true' if v['start_hidden'] else 'false',
             ('ui', 'notify_on_copy'): 'true' if v['notify_on_copy'] else 'false',
+            ('ui', 'tray_backend'): v['tray_backend'],
         })
         apply_theme(v['theme'])
         service.restart_hotkey()
+        # 托盘后端改了要重建图标，否则得等下次启动才生效
+        parent = self.get_transient_for()
+        if hasattr(parent, 'reload_tray'):
+            try:
+                parent.reload_tray()
+            except Exception:
+                pass
         try:
             core.set_autostart(v['autostart'])
         except OSError:
@@ -408,6 +468,7 @@ class SettingsDialog(Gtk.Dialog):
         self.chk_hide_after.set_active(d['ui']['hide_after_copy'] == 'true')
         self.chk_start_hidden.set_active(d['ui']['start_hidden'] == 'true')
         self.chk_notify.set_active(d['ui']['notify_on_copy'] == 'true')
+        self.cmb_backend.set_active_id(d['ui'].get('tray_backend', 'auto'))
 
 
 def open_settings(parent=None):

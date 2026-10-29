@@ -1,3 +1,28 @@
+wps-clip-bridge (1.5.0) unstable; urgency=medium
+
+  * 修复「按快捷键复制没有任何反馈」：copy_latest() 复制完只写日志，从不
+    发桌面通知 —— 设置里勾了「复制成功后发送桌面通知」也不起作用。热键这条
+    路径既不弹窗口也没有状态栏，通知是用户唯一的反馈渠道。现在成功发
+    「已复制 xxx」，失败和「没有最近文档」也各有一条说明（失败必定通知，
+    不受该勾选项影响）。
+  * 默认「复制最近文档」快捷键由 Ctrl+Alt+V 改为 Ctrl+Shift+C。已有的
+    config.ini 不会被覆盖，需要改的在设置里改一下即可。
+    注意：Ctrl+Shift+C 在终端、VS Code 等程序里常被用作「复制」，全局热键
+    会优先截获它。要是不希望这样，在设置里换成 Ctrl+Shift+Alt+C 之类。
+  * 托盘图标支持双击 / 中键显示窗口：AppIndicator 用
+    set_secondary_activate_target 把动作指向「显示窗口」菜单项。
+    另外设置里新增「托盘图标样式」，选「经典图标」可实现单击即显示窗口
+    （StatusNotifier 协议里左键固定是弹菜单，程序改不了）。
+  * 设置窗口新增「关于」：公文帮帮忙 出品、版本号、可点击的官网链接。
+  * 图标内容缩到画布的 83%（原来铺满 100%），与 workbuddy 等系统图标一致，
+    在面板和任务栏里不再显得比邻居大一圈。新增 tools/render-icons.py
+    负责从 SVG 渲染各尺寸 PNG 并自检内容占比。
+  * 桌面通知的图标改用绝对路径，图标没有装进主题时也能显示。
+  * 测试 142 -> 150：新增 tests/test_hotkey.py，覆盖通知的四个分支与默认
+    快捷键（故意退回 bug 版本验证过会红）。
+
+ -- shuai <shuai@localhost>  Thu, 29 Oct 2026 20:10:00 +0800
+
 wps-clip-bridge (1.4.1) unstable; urgency=medium
 
   * 把 python-xlib（及它依赖的 six）打包进程序内部，安装依赖从 4 个减到

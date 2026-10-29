@@ -466,6 +466,24 @@ class App(object):
     def tray_available(self):
         return self.tray is not None and self.tray.available
 
+    def reload_tray(self):
+        """按当前配置重建托盘（设置里换了「托盘图标样式」时调用）。"""
+        try:
+            if self.tray is not None:
+                self.tray.stop()
+        except Exception:
+            pass
+        self.tray = None
+        self._setup_tray()
+        ok = self.tray_available()
+        if ok:
+            core.log('托盘已重建：%s' % self.tray.backend)
+        elif not self.win.get_visible():
+            # 新后端不可用，而窗口是藏起来的 —— 否则用户就彻底找不到程序了
+            self.show_window()
+            self.set_status('托盘不可用，已把窗口显示出来')
+        return ok
+
     def quit_app(self, *_):
         try:
             if self.tray is not None:

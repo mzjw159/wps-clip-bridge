@@ -251,11 +251,25 @@ def restart_hotkey():
     return True
 
 
+def _notify_icon():
+    """通知里的图标：优先给绝对路径。
+
+    `notify-send -i wps-file` 依赖图标主题查找，图标没装到主题里（比如直接
+    从源码树跑）就什么都不显示。给路径最稳。
+    """
+    for p in ('/usr/share/icons/hicolor/256x256/apps/wps-file.png',
+              '/usr/share/pixmaps/wps-file.png',
+              '/usr/share/icons/hicolor/scalable/apps/wps-file.svg'):
+        if os.path.exists(p):
+            return p
+    return 'wps-file'
+
+
 def notify(summary, body=''):
     """发一条桌面通知（notify-send 不存在就静默跳过）。"""
     try:
         args = ['notify-send', '-a', 'WPS 最近文档复制',
-                '-i', 'wps-file', '-t', '3000', summary]
+                '-i', _notify_icon(), '-t', '3000', summary]
         if body:
             args.append(body)
         subprocess.Popen(args, stdin=subprocess.DEVNULL,

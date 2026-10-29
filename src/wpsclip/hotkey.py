@@ -8,7 +8,7 @@
     enabled = true
     combo = <Control><Alt>c          # 唤起窗口
     copy_enabled = true
-    copy_combo = <Control><Alt>v     # 复制最近一个文档，不弹窗
+    copy_combo = <Control><Shift>c   # 复制最近一个文档，不弹窗
 
 采用 X11 的 ``grab_key``。WPS、微信、文件管理器都是 XWayland 客户端，
 所以它们在前台时热键有效；Wayland 原生应用（如 GTK4 程序）前台时可能不响应，
@@ -145,7 +145,7 @@ def bindings():
         else:
             core.log('唤起窗口的热键无法解析: %r' % text)
     if core.conf_bool('hotkey', 'copy_enabled', True):
-        text = core.conf('hotkey', 'copy_combo', '<Control><Alt>v')
+        text = core.conf('hotkey', 'copy_combo', '<Control><Shift>c')
         parsed = parse_combo(text)
         if parsed:
             out.append(('copy', text, parsed[0], parsed[1]))
@@ -155,18 +155,33 @@ def bindings():
 
 
 def copy_latest():
-    """不开窗口，直接把最近一个文档放进剪贴板。"""
+    """不开窗口，直接把最近一个文档放进剪贴板，并用桌面通知回话。
+
+    通知是这条路径唯一的反馈渠道 —— 不弹窗口、没有状态栏，用户按完
+    组合键只能靠通知知道「复制了哪个文件」或「为什么没成」。
+    """
     from . import recent, service
     try:
         rows = recent.parse_recent(limit=1)
     except Exception as ex:
         core.log('读取最近文档失败: %r' % (ex,))
+        service.notify('读取最近文档失败', str(ex))
         return False
     if not rows:
         core.log('没有最近文档可复制')
+        service.notify('没有可复制的最近文档', '先用 WPS 打开一个文档，或打开窗口手动选')
         return False
+
     ok, msg = service.request_copy(rows[:1])
-    core.log('热键复制 %s -> %s' % (rows[0], '成功' if ok else msg))
+    if ok:
+        brief = service.describe(rows[:1])
+        core.log('热键复制 %s -> 成功' % rows[0])
+        if core.conf_bool('ui', 'notify_on_copy', True):
+            service.notify('已复制 %s' % brief, '切到桌面或微信按 Ctrl+V 即可粘贴')
+    else:
+        # 失败一定要说：不然用户只会觉得「按了没反应」
+        core.log('热键复制 %s -> %s' % (rows[0], msg))
+        service.notify('复制失败', msg)
     return ok
 
 

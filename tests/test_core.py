@@ -57,7 +57,7 @@ class DefaultsTest(_TmpHome):
     def test_no_file_uses_defaults(self):
         self.assertEqual(core.conf('ui', 'theme', 'system'), 'system')
         self.assertEqual(core.conf('hotkey', 'combo', ''), '<Control><Alt>c')
-        self.assertEqual(core.conf('hotkey', 'copy_combo', ''), '<Control><Alt>v')
+        self.assertEqual(core.conf('hotkey', 'copy_combo', ''), '<Control><Shift>c')
         self.assertTrue(core.conf_bool('hotkey', 'enabled', False))
 
     def test_unknown_section_falls_back(self):

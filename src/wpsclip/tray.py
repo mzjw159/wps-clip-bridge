@@ -44,6 +44,7 @@ class Tray(object):
         self._ai = None
         self._status_icon = None
         self._menu = None
+        self._show_item = None
 
     # ------------------------------------------------------------ 构建
     def _build_menu(self):
@@ -61,6 +62,10 @@ class Tray(object):
                 continue
             mi = Gtk.MenuItem(label=label)
             mi.connect('activate', lambda _w, cb=cb: cb())
+            if label == '显示窗口':
+                # 记下来给 AppIndicator 当「次级激活」目标：中键点图标、
+                # 以及不少面板把双击当次级激活，都会走到这里。
+                self._show_item = mi
             menu.append(mi)
         menu.show_all()
         self._menu = menu
@@ -88,7 +93,23 @@ class Tray(object):
                 _ID, _icon_arg(), AppIndicator.IndicatorCategory.APPLICATION_STATUS)
             ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
             ind.set_title('WPS 最近文档复制')
-            ind.set_menu(self._build_menu())
+            menu = self._build_menu()
+            ind.set_menu(menu)
+
+            # 「双击 / 中键点图标 -> 显示窗口」
+            #
+            # StatusNotifier 协议里没有「双击」这个语义：面板对左键的处理就是
+            # 弹菜单（这是面板决定的，程序改不了）。协议里唯一能表达「点一下
+            # 图标但不要菜单」的是 secondary activate，靠它把动作指向「显示
+            # 窗口」这一项 —— 中键一定生效，很多面板（含 UKUI）也把双击转发
+            # 给它。真要做到「单击即显示」，只能用 Gtk.StatusIcon 后端。
+            item = getattr(self, '_show_item', None)
+            if item is not None and hasattr(ind, 'set_secondary_activate_target'):
+                try:
+                    ind.set_secondary_activate_target(item)
+                except Exception as ex:
+                    core.log('设置次级激活目标失败: %r' % (ex,))
+
             self._indicator = ind
             self._ai = AppIndicator
             self.backend = 'indicator'

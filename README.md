@@ -34,7 +34,7 @@ CLIPBOARD 持有者：Qt Selection Owner for wpsoffice
 三种方式都行，效果一样：
 
 ```sh
-sudo apt install ./dist/wps-clip-bridge_1.4.1_all.deb   # 命令行
+sudo apt install ./dist/wps-clip-bridge_1.5.0_all.deb   # 命令行
 ```
 
 - **双击** .deb 文件，用系统的安装器（麒麟上是「安装器 / kylin-installer」）；
@@ -74,8 +74,13 @@ wps-copy --migrate
 
 窗口卡在后台时再按一次热键，会把已有窗口提到前面，不会重复开。
 
-另一组热键 `Ctrl+Alt+V` 更省事：**不弹窗**，直接把最近一个文档放进剪贴板，
-适合「就复制刚才那个」的场景。两组键都能在设置里改。
+另一组热键 `Ctrl+Shift+C` 更省事：**不弹窗**，直接把最近一个文档放进剪贴板，
+适合「就复制刚才那个」的场景。复制完会弹一条桌面通知告诉你复制的是哪个文件 ——
+这条路径没有窗口也没有状态栏，通知就是你唯一的反馈。
+
+> `Ctrl+Shift+C` 在终端、VS Code 这类程序里常被用作「复制」，全局热键会优先
+> 截获它（终端里按了没反应就是这个原因）。介意的话在设置里换成
+> `Ctrl+Shift+Alt+C` 之类。两组键都能改。
 
 ### 2. 图形窗口
 
@@ -194,10 +199,18 @@ wps-copy --doctor
 | 窗口与托盘 | 关闭时收进托盘 | 点 ✕ 或按 `Esc` 只隐藏，不退出程序 |
 | 窗口与托盘 | 复制后自动收起 | 复制成功就把窗口收起来，不打断你粘贴 |
 | 窗口与托盘 | 启动时待在托盘 | 开机/启动时不弹窗，只在托盘待命 |
-| 窗口与托盘 | 复制成功发通知 | 走 `notify-send`，窗口收起时也能看到结果 |
+| 窗口与托盘 | 复制成功发通知 | 走 `notify-send`；窗口收起时、以及用快捷键复制时，这是唯一的结果反馈 |
+| 窗口与托盘 | 托盘图标样式 | 自动 / 跟随面板 / 经典图标。经典图标可以「点一下即显示窗口」 |
 | 启动 | 开机自动启动 | 写 `~/.config/autostart/` 的屏蔽项，不动 `/etc` 下的系统文件 |
 
-托盘图标：左键/菜单「显示窗口」唤回；菜单里还有「复制最近文档」「设置…」「退出」。
+托盘图标：**双击或中键点它唤回窗口**；菜单里还有「显示窗口」「复制最近文档」
+「设置…」「退出」。
+
+双击这件事受面板限制：StatusNotifier 协议里，面板对左键的处理固定是弹菜单，
+程序改不了。程序能做的是把「次级激活」（中键、以及不少面板转发给它的双击）
+指向「显示窗口」。想要严格意义上的「单击即显示窗口」，把上面的「托盘图标样式」
+改成「经典图标」——它走老的 XEmbed 托盘，点击语义由程序自己决定。
+
 如果桌面环境既不支持 StatusNotifier 也不支持 XEmbed 托盘，程序会自动退化为
 「关闭即退出」，避免窗口消失后无处唤回。
 
@@ -259,6 +272,53 @@ OUT=/tmp/out ./build.sh # 换个输出目录
 
 只依赖 `dpkg-deb` 和 `gzip`，不需要 `debhelper` / `fakeroot`（用 `--root-owner-group`）。
 
+### 换图标
+
+图标只有一个源文件：`data/wps-file.svg`。换的时候不用碰别的：
+
+```sh
+cp 新图标.svg data/wps-file.svg     # 1) 覆盖，文件名保持不变
+./tools/render-icons.py             # 2) 渲染 48/64/128/256/512 + 500px 主图
+./build.sh                          # 3) 重新打包
+```
+
+脚本会打印每一档的内容占比，正常都在 83% 左右：
+
+```
+尺寸     内容占比     文件
+48     83%      data/icons/hicolor/48x48/apps/wps-file.png  ✔
+64     84%      data/icons/hicolor/64x64/apps/wps-file.png  ✔
+...
+```
+
+**83% 是怎么来的。** SVG 的 viewBox 是 `0 0 1024 1024`。图形如果铺满整个
+viewBox（最初那版就是），渲染出来的图标在面板和任务栏里会比邻居大一圈 ——
+workbuddy 这类系统图标的内容只占画布 `40/48 ≈ 83%`。所以现在 SVG 最外层套了：
+
+```xml
+<g transform="translate(87.04,87.04) scale(0.83)">
+```
+
+换新图后先跑一次 `./tools/render-icons.py --check`（只看不改）判断：
+
+- 占比已经在 83% 附近 → 不用动 SVG，直接渲染；
+- 明显偏大或偏小 → 调 `scale()` 与 `translate()`，公式是
+  `translate = 1024 × (1 − scale) / 2`。
+
+**为什么同一套图要装两份。** 名字分别是 `wps-file` 和 `wps-clip-bridge`。
+后者是给麒麟安装器和软件中心用的 —— 它们按**包名**去图标主题里查
+（`QIcon::fromTheme('wps-clip-bridge')`），只装前者就显示成系统默认的齿轮。
+`build.sh` 会自动装两份，换图标时不用管。
+
+**换完没生效？** 是缓存：
+
+```sh
+sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor
+rm -rf ~/.cache/ukui ~/.cache/icon-cache.kcache     # 面板自己的图标缓存
+```
+
+另外，托盘和任务栏里的旧图标会一直用到进程重启 —— 从托盘菜单「退出」再打开。
+
 ---
 
 ## 开发
@@ -283,15 +343,15 @@ python3 -m wpsclip.daemon        # 看护进程（依次拉起 bridge + hotkey�
 
 ### 跑测试
 
-纯函数部分有单元测试（`tests/`，142 个用例），不需要图形界面，也不碰你的
+纯函数部分有单元测试（`tests/`，150 个用例），不需要图形界面，也不碰你的
 真实配置（每个用例都在临时目录里跑）：
 
 ```sh
 python3 -m unittest discover -s tests          # 全跑，约 1 秒
 python3 -m unittest discover -s tests -v       # 逐个用例
-python3 -m unittest tests.test_recent -v       # 只跑解析层
 python3 -m unittest tests.test_service -v      # 只跑复制编排
 python3 -m unittest tests.test_recent -v       # 只跑解析与多源兜底
+python3 -m unittest tests.test_hotkey -v       # 只跑热键反馈
 python3 -m unittest tests.test_vendor -v       # 只跑内置依赖自检
 ```
 
@@ -351,6 +411,7 @@ wps-clip-bridge/
 │   └── daemon.py            看护进程 wps-clip-bridge-daemon
 ├── bin/                     5 个可执行入口（薄壳，转手给上面的模块）
 ├── data/                    菜单项、自启项、图标、man page
+├── tools/                   辅助脚本（render-icons.py：从 SVG 出各尺寸 PNG）
 ├── tests/                   单元测试（不需要图形环境）
 ├── debian/                  control、维护脚本、copyright、changelog
 ├── dist/                    打包产物（已放 1.3.0）

@@ -12,7 +12,7 @@ import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.4.1'
+VERSION = '1.5.0'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {
@@ -21,7 +21,7 @@ DEFAULTS = {
         'combo': '<Control><Alt>c',
         # 第二个热键：不用开窗口，直接把最近一个文档丢进剪贴板
         'copy_enabled': 'true',
-        'copy_combo': '<Control><Alt>v',
+        'copy_combo': '<Control><Shift>c',
     },
     'bridge': {
         # 剪贴板轮询间隔（秒），越小越灵敏、越耗电
