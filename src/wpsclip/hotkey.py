@@ -73,28 +73,48 @@ def parse_combo(text):
 
 
 def grab_all(d, mask, keyname):
-    """抓取组合键的四种锁定状态，否则开大写/数字锁时热键会失效。"""
+    """抓取组合键的四种锁定状态，否则开大写/数字锁时热键会失效。
+
+    返回 ``(grabbed, conflicts)``：conflicts 是抓取时被别的程序占用的修饰状态
+    数量。X 的 GrabKey 冲突不会抛异常，只会异步返回 BadAccess —— 必须临时插一个
+    错误处理器再 sync 才看得见，否则「别人的机器上 Ctrl+Alt+C 早就被占了」时
+    热键会一声不响地失效。
+    """
     root = d.screen().root
     keysym = XK.string_to_keysym(keyname)
     if not keysym:
         core.log('未知按键名: %r' % keyname)
-        return []
+        return [], 0
     keycode = d.keysym_to_keycode(keysym)
     if not keycode:
         core.log('按键 %r 没有对应 keycode' % keyname)
-        return []
+        return [], 0
 
     variants = [mask, mask | X.Mod2Mask, mask | X.LockMask,
                 mask | X.Mod2Mask | X.LockMask]
-    grabbed = []
-    for m in variants:
+    errors = []
+    prev = None
+    if hasattr(d, 'set_error_handler'):
         try:
-            root.grab_key(keycode, m, True, X.GrabModeAsync, X.GrabModeAsync)
-            grabbed.append((keycode, m))
-        except Exception as ex:
-            core.log('grab err %r' % (ex,))
-    d.sync()
-    return grabbed
+            prev = d.set_error_handler(lambda e, r: errors.append(e))
+        except Exception:
+            prev = None
+    grabbed = []
+    try:
+        for m in variants:
+            try:
+                root.grab_key(keycode, m, True, X.GrabModeAsync, X.GrabModeAsync)
+                grabbed.append((keycode, m))
+            except Exception as ex:
+                core.log('grab err %r' % (ex,))
+        d.sync()
+    finally:
+        if prev is not None:
+            try:
+                d.set_error_handler(prev)
+            except Exception:
+                pass
+    return grabbed, len(errors)
 
 
 def launch_gui():
@@ -173,11 +193,17 @@ def main(argv=None):
 
     handlers = {}        # (keycode, 修饰状态) -> action
     grabbed_all = []
+    conflicts = []
     for action, text, mask, keyname in binds:
-        grabbed = grab_all(d, mask, keyname)
+        grabbed, bad = grab_all(d, mask, keyname)
         if not grabbed:
             core.log('热键 %s 抓取失败，可能已被其它程序占用' % text)
+            conflicts.append((text, 4))
             continue
+        if bad:
+            # 部分修饰状态被别的程序占了（比如搜狗/输入法、截图工具）
+            core.log('热键 %s 有 %d 组修饰状态被其它程序占用' % (text, bad))
+            conflicts.append((text, bad))
         keysym = XK.string_to_keysym(keyname)
         keycode = d.keysym_to_keycode(keysym)
         for kc, m in grabbed:
@@ -190,6 +216,13 @@ def main(argv=None):
         core.log('一个热键都没抓到，退出')
         si.release()
         return 1
+
+    if conflicts:
+        # 静默失效最难查：明确告诉用户换个组合键
+        from . import service
+        detail = '；'.join('%s（%d/4 组）' % (t, n) for t, n in conflicts)
+        service.notify('快捷键没抢到', '%s 被其他程序占用了，在设置里换一个组合键'
+                       % detail)
 
     last = {}
     mask_bits = X.ControlMask | X.Mod1Mask | X.Mod4Mask | X.ShiftMask

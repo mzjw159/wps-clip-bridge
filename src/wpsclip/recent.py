@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-"""读取 WPS 的「最近打开文档」列表。
+"""读取 WPS 的「最近打开文档」列表 —— 多数据源，坏一个不至于全空。
 
-数据在 ``~/.config/Kingsoft/Office.conf``，形如::
+数据主源是 ``~/.config/Kingsoft/Office.conf``，形如::
 
     pdf\\RecentFiles\\files\\1\\path=/home/u/\\x684c\\x9762/\\x901a\\x77e5.pdf
 
@@ -10,22 +10,72 @@
 字符即停。不是定长 4 位 —— ASCII 字符（如文件名里的 "2026"）会写成
 ``\\x32\\x30\\x32\\x36``，若按定长 4 位解析会把 ``\\x32\\x30`` 吃成 0x3230，
 整条路径就废了、文件被判为不存在而被过滤掉。
+
+**为什么要有备用数据源**：Office.conf 是 WPS 内部私有格式，不是公开接口。
+它哪天把 ``RecentFiles`` 改个名、把转义换个方式，只认键名的解析就会静默
+返回空列表（用户只看到「列表空的」，什么提示都没有）。所以这里分三层：
+
+1. **结构化解析**（认键名，能拿到序号）；
+2. **通用扫描**（同一个文件里，凡是「值像被转义的绝对路径、且指向真实文档」
+   的键值对全部收进来）—— 键名怎么改都不影响这一层；
+3. **兜底数据源**（主源一条都读不出来时才启用）：GTK 的
+   ``recently-used.xbel``、WPS 云文档本地目录里最近改过的文档。
+
+任何一层有收获就用，全都没有时由 :func:`diagnose` 给出**人话解释**，
+而不是让界面显示一句空的。
 """
 import os
 import re
+import urllib.parse
 
+# 主数据源（测试里会替换成临时文件）
 CONF = os.path.expanduser('~/.config/Kingsoft/Office.conf')
+_DEFAULT_CONF = CONF
+
+# 别名：个别版本的 WPS / 大小写不一致的部署
+CONF_ALIASES = (
+    '~/.config/kingsoft/Office.conf',
+    '~/.config/Kingsoft/office.conf',
+)
+
+# 兜底数据源
+XBEL_CANDIDATES = (
+    '~/.local/share/recently-used.xbel',
+    '~/.recently-used.xbel',
+)
+CLOUD_DIRS = (
+    '~/文档/WPS Cloud Files',
+    '~/文档/WPS 云文档',
+    '~/Documents/WPS Cloud Files',
+    '~/WPS Cloud Files',
+)
+
+# 能当「文档」处理的扩展名（通用扫描只认这些，避免把日志、配置当文档）。
+# 故意不含 .txt：WPS 不会打开纯文本，而在配置里出现 .txt 的多半是日志路径。
+DOC_EXTS = (
+    '.doc', '.docx', '.wps', '.wpt', '.rtf',
+    '.xls', '.xlsx', '.et', '.ett', '.csv',
+    '.ppt', '.pptx', '.dps', '.dpt',
+    '.pdf', '.ofd',
+)
 
 _HEX = '0123456789abcdefABCDEF'
 
 # 本地文档的最近打开记录
 _PATH_RE = re.compile(
     r'^(?:wps|et|wpp|pdf|ofd)'
-    r'\\RecentFiles\\files\\(\d+)\\(\w+)=(.*)$', re.M)
+    r'\\RecentFiles\\files\\(\d+)\\(\w+)=(.*)$', re.M | re.I)
 
 # 云文档 / 办公空间打开记录（打开过的云文件通常也在本地留了缓存副本）
 _SPACE_RE = re.compile(
-    r'^plugins\\officespace\\[^\n]*?\\openfilelist\\(\d+)\\(path|localpath)=(.*)$', re.M)
+    r'^plugins\\officespace\\[^\n]*?\\openfilelist\\(\d+)\\(path|localpath)=(.*)$',
+    re.M | re.I)
+
+# 通用扫描：任何 key=value
+_ASSIGN_RE = re.compile(r'^([^=\n]+)=(.*)$', re.M)
+
+# 判断「路径是不是 WPS 自己的内部文件」（模板、缓存、字体等）
+_INTERNAL = ('/Kingsoft/office6/', '/.local/share/Kingsoft/')
 
 
 def unesc(s):
@@ -56,8 +106,38 @@ def unesc(s):
     return ''.join(out)
 
 
+# ---------------------------------------------------------------- 主数据源
+
+def conf_paths():
+    """要尝试的配置文件路径（存在的、去重、按优先级）。
+
+    ``CONF`` 被外部替换过（测试、或将来允许 --config 指定）时就只用它，
+    不再顺带读别名 —— 否则「我在测试里指了临时文件」会变成读了真实配置。
+    """
+    out = []
+    if os.path.isfile(CONF):
+        out.append(CONF)
+    if CONF == _DEFAULT_CONF:
+        for c in CONF_ALIASES:
+            p = os.path.expanduser(c)
+            if p not in out and os.path.isfile(p):
+                out.append(p)
+    return out
+
+
+def read_conf_text():
+    """把主数据源读成一段文本；都没有返回 (None, '')。"""
+    for p in conf_paths():
+        try:
+            with open(p, 'rb') as f:
+                return f.read().decode('utf-8', 'replace'), p
+        except OSError:
+            continue
+    return None, ''
+
+
 def _collect(data):
-    """返回 {真实路径: 记录序号}，同路径只保留首次出现。"""
+    """结构化解析：返回 {真实路径: 记录序号}，同路径只保留首次出现。"""
     found = {}
     groups = (_PATH_RE, _SPACE_RE)
     for pat in groups:
@@ -73,37 +153,235 @@ def _collect(data):
     return found
 
 
-def parse_recent(limit=80, only_exist=True):
-    """按文件修改时间倒序，返回最近文档的真实路径列表。"""
-    try:
-        with open(CONF, 'rb') as f:
-            data = f.read().decode('utf-8', 'replace')
-    except OSError:
-        return []
+def _is_internal(path):
+    return any(s in path for s in _INTERNAL)
 
-    rows = []
-    for path in _collect(data):
-        if only_exist and not os.path.isfile(path):
+
+def _is_doc(path):
+    return os.path.splitext(path)[1].lower() in DOC_EXTS
+
+
+def scan_assignments(data):
+    """通用扫描：不看键名，只看值。
+
+    WPS 若把 ``RecentFiles`` 改名、层级改结构，结构化解析会条条落空；但只要
+    它还在用「键=被转义的绝对路径」这种写法，这一层就能把文档捞回来。
+    只收同时满足三个条件的值：看起来是绝对路径、扩展名属于文档、不是 WPS
+    自己的模板/缓存。
+    """
+    out = []
+    for m in _ASSIGN_RE.finditer(data):
+        raw = m.group(2).strip()
+        if not raw or '\n' in raw or len(raw) > 4096:
             continue
-        try:
-            mt = os.path.getmtime(path)
-        except OSError:
-            mt = 0
-        rows.append((mt, path))
-    rows.sort(reverse=True)
+        if '\\x' in raw:
+            path = unesc(raw)
+        elif raw.startswith('file://'):
+            path = urllib.parse.unquote(raw[7:])
+        elif raw.startswith('/'):
+            path = raw
+        else:
+            continue
+        if not path.startswith('/') or not _is_doc(path) or _is_internal(path):
+            continue
+        if path not in out:
+            out.append(path)
+    return out
 
+
+# ---------------------------------------------------------------- 兜底数据源
+
+_BOOKMARK_RE = re.compile(r'<bookmark\b([^>]*)>', re.I | re.S)
+_ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
+
+
+def parse_xbel(text):
+    """解析 GTK 的最近使用记录，只留本地文档（按记录顺序，最新的在前）。"""
+    out = []
+    for m in _BOOKMARK_RE.finditer(text or ''):
+        attrs = dict(_ATTR_RE.findall(m.group(1)))
+        uri = attrs.get('href', '')
+        if not uri.startswith('file://'):
+            continue
+        path = urllib.parse.unquote(uri[7:])
+        if not path.startswith('/') or not _is_doc(path) or _is_internal(path):
+            continue
+        if path not in out:
+            out.append(path)
+    return out
+
+
+def read_xbel():
+    for c in XBEL_CANDIDATES:
+        p = os.path.expanduser(c)
+        try:
+            with open(p, 'rb') as f:
+                return parse_xbel(f.read().decode('utf-8', 'replace'))
+        except OSError:
+            continue
+    return []
+
+
+def scan_cloud_dirs(max_files=200, max_entries=6000):
+    """扫云文档本地目录，按修改时间取最近的文档。
+
+    WPS 云文档在本地 `~/文档/WPS Cloud Files/<账号>/…` 有副本，文件名就是
+    真名。主数据源失效时，这是唯一还能反映「最近在改什么」的地方。
+    """
+    rows = []
+    seen = 0
+    for base in CLOUD_DIRS:
+        root = os.path.expanduser(base)
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+            depth = dirpath[len(root):].count(os.sep)
+            if depth >= 4:
+                dirnames[:] = []
+            for name in filenames:
+                seen += 1
+                if seen > max_entries:
+                    return _rank(rows, max_files)
+                if not _is_doc(name):
+                    continue
+                p = os.path.join(dirpath, name)
+                try:
+                    rows.append((os.path.getmtime(p), p))
+                except OSError:
+                    continue
+    return _rank(rows, max_files)
+
+
+def _rank(rows, limit):
+    rows.sort(reverse=True)
     out, seen = [], set()
     for _, p in rows:
         if p in seen:
             continue
         seen.add(p)
         out.append(p)
-    return out[:limit]
+        if len(out) >= limit:
+            break
+    return out
+
+
+# ---------------------------------------------------------------- 汇总
+
+def collect(only_exist=True, allow_fallback=True):
+    """按层收集候选路径，返回 (路径列表, 统计)。
+
+    统计里带每一层的命中数，:func:`diagnose` 和 ``wps-copy --doctor`` 都靠它。
+    """
+    stats = {'conf': '', 'structured': 0, 'scanned': 0,
+             'conf_files': [], 'fallback': '', 'fallback_hits': 0}
+    paths = {}
+
+    data, used = read_conf_text()
+    stats['conf'] = used
+    for p in conf_paths():
+        try:
+            stats['conf_files'].append((p, os.path.getsize(p)))
+        except OSError:
+            pass
+
+    if data:
+        structured = _collect(data)
+        for p in structured:
+            paths.setdefault(p, '结构化')
+        stats['structured'] = len(structured)
+        scanned = scan_assignments(data)
+        for p in scanned:
+            paths.setdefault(p, '通用扫描')
+        stats['scanned'] = len(scanned)
+
+    if not paths and allow_fallback:
+        for label, getter in (('GTK 最近使用', read_xbel),
+                              ('云文档目录', scan_cloud_dirs)):
+            hits = getter()
+            if hits:
+                stats['fallback'] = label
+                stats['fallback_hits'] = len(hits)
+                for p in hits:
+                    paths.setdefault(p, label)
+                break
+
+    rows = []
+    for p in paths:
+        if only_exist and not os.path.isfile(p):
+            continue
+        try:
+            mt = os.path.getmtime(p)
+        except OSError:
+            mt = 0
+        rows.append((mt, p))
+    rows.sort(reverse=True)
+    stats['total'] = len(paths)
+    stats['missing'] = len(paths) - len(rows)
+    return [p for _, p in rows], stats
+
+
+def parse_recent(limit=80, only_exist=True, allow_fallback=True):
+    """按文件修改时间倒序，返回最近文档的真实路径列表。"""
+    paths, _ = collect(only_exist=only_exist, allow_fallback=allow_fallback)
+    return paths[:limit]
+
+
+def _fmt_size(n):
+    if not n:
+        return '0 B'
+    if n < 1024:
+        return '%d B' % n
+    if n < 1024 * 1024:
+        return '%.1f KB' % (n / 1024.0)
+    return '%.1f MB' % (n / 1048576.0)
+
+
+def diagnose():
+    """给界面/命令行用的一句话诊断 + 明细。
+
+    界面在列表为空时直接把 ``hint`` 显示出来，不再是一句「没读到最近文档」——
+    到底是没装 WPS、还是格式变了、还是文件被删了，用户能自己判断。
+    """
+    paths, st = collect(only_exist=False)
+    exists = [p for p in paths if os.path.isfile(p)]
+    info = {
+        'conf': st.get('conf', ''),
+        'conf_files': st.get('conf_files', []),
+        'structured': st.get('structured', 0),
+        'scanned': st.get('scanned', 0),
+        'total': len(paths),
+        'existing': len(exists),
+        'missing': len(paths) - len(exists),
+        'fallback': st.get('fallback', ''),
+        'fallback_hits': st.get('fallback_hits', 0),
+        'hint': '',
+    }
+
+    if not st.get('conf_files'):
+        info['hint'] = ('没找到 WPS 的最近文档配置（%s）。确认装的是 WPS for Linux，'
+                        '并至少打开过一个文档；也可以用「浏览本地文件…」直接选。'
+                        % CONF)
+    elif exists:
+        if st.get('fallback'):
+            info['hint'] = ('WPS 的配置里没读到文档，已改用「%s」兜底，'
+                            '共 %d 个。' % (st['fallback'], len(exists)))
+        else:
+            info['hint'] = '共 %d 个文档。' % len(exists)
+    elif paths:
+        info['hint'] = ('WPS 记录了 %d 个文档，但文件都不在了（可能被移动、'
+                        '删除，或在没挂载的磁盘上）。' % len(paths))
+    else:
+        info['hint'] = ('WPS 的配置里没解析出任何文档路径 —— 多半是 WPS 升级后'
+                        '改了格式。备用数据源（GTK 最近使用记录、云文档目录）'
+                        '也没有可用条目；可以先点「浏览本地文件…」复制，'
+                        '并把 wps-copy --doctor 的输出发出来。')
+    return info
 
 
 def kind_of(path):
     """给列表用的类型标记：W/X/P/D/云。"""
-    if 'WPS Cloud Files' in path:
+    if 'WPS Cloud Files' in path or 'WPS 云文档' in path:
         return '云'
     ext = os.path.splitext(path)[1].lower()
     return {

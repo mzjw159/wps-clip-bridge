@@ -3,8 +3,8 @@
 """图形窗口：图形化的最近文档选择器。"""
 import sys
 
-from wpsclip.gui import main
+from wpsclip.bootstrap import run
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(run('wpsclip.gui'))

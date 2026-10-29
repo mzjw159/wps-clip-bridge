@@ -3,8 +3,8 @@
 """后台守护：拉起并看护桥接服务与热键。"""
 import sys
 
-from wpsclip.daemon import main
+from wpsclip.bootstrap import run
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(run('wpsclip.daemon'))

@@ -13,6 +13,7 @@
     wps-copy --start         # 立即启动后台服务（装完不用重启登录）
     wps-copy --stop          # 停止后台服务
     wps-copy --status        # 查看后台服务状态
+    wps-copy --doctor        # 自检：数据源、依赖、会话类型、服务状态
     wps-copy --migrate       # 清理旧的手工部署（首次安装后跑一次）
 """
 import os
@@ -31,7 +32,8 @@ def cmd_list(args):
     rows = recent.parse_recent(limit=core.conf_int('ui', 'limit', 80))
     if not rows:
         print('没有读到 WPS 最近文档。')
-        print('可能原因：还没用 WPS 打开过文件，或 WPS 配置不在默认位置。')
+        print(recent.diagnose()['hint'])
+        print('详细自检：wps-copy --doctor')
         return 1
     width = len(str(len(rows)))
     for i, p in enumerate(rows, 1):
@@ -71,8 +73,8 @@ def cmd_copy(args):
     if not args:
         rows = recent.parse_recent(limit=1)
         if not rows:
-            print('没有读到 WPS 最近文档。用 wps-copy -f <文件> 直接指定，')
-            print('或运行 wps-copy --gui 从「浏览本地文件」里选。')
+            print('没有读到 WPS 最近文档。%s' % recent.diagnose()['hint'])
+            print('也可以：wps-copy -f <文件> 直接指定，或 wps-copy --gui 里「浏览本地文件」。')
             return 1
         paths = rows
     else:
@@ -154,6 +156,106 @@ def cmd_status(_args):
     if not core.is_running('bridge'):
         print('\n后台服务未运行，执行 wps-copy --start 立即启动。')
     return 0
+
+
+def cmd_doctor(_args):
+    """一条命令看全部关键点：数据源、剪贴板服务、依赖、会话类型。
+
+    分享给别人的机器上出问题时，让对方把这一段贴出来，比来回问
+    「你装 WPS 了吗」「你开的是 X11 还是 Wayland」快得多。
+    """
+    import platform
+
+    from . import recent as rn
+
+    ok, warn, bad = [], [], []
+
+    def mark(level, text):
+        (ok if level == 'ok' else warn if level == 'warn' else bad).append(text)
+
+    print('%s %s 自检' % (core.APP, core.VERSION))
+    print('系统：%s %s / Python %s'
+          % (platform.system(), platform.machine(), platform.python_version()))
+    sess = os.environ.get('XDG_SESSION_TYPE', '') or '未知'
+    disp = os.environ.get('DISPLAY', '') or '（空）'
+    print('会话：XDG_SESSION_TYPE=%s  DISPLAY=%s' % (sess, disp))
+    if sess == 'wayland':
+        mark('warn', '当前是 Wayland 会话：程序通过 XWayland 工作，X11 全局热键只在'
+                     'XWayland 应用有焦点时才收得到；热键不灵时用托盘菜单或命令行。')
+    if not os.environ.get('DISPLAY'):
+        mark('bad', '没有 DISPLAY —— 剪贴板服务需要 X11（XWayland 也算）。')
+
+    print('\n依赖：')
+    for mod, hint in (('gi', 'python3-gi / gir1.2-gtk-3.0'),
+                      ('Xlib', 'python3-xlib')):
+        try:
+            __import__(mod)
+            print('  ✔ %-8s' % mod)
+        except Exception:
+            print('  ✘ %-8s 缺少 %s' % (mod, hint))
+            mark('bad', '缺少 Python 模块 %s（%s）' % (mod, hint))
+    for exe, hint in (('notify-send', 'libnotify-bin（通知，可选）'),
+                      ('import', 'imagemagick（只在截图调试时用，可不装）')):
+        found = any(os.access(os.path.join(p, exe), os.X_OK)
+                    for p in os.environ.get('PATH', '').split(':'))
+        print('  %s %-12s %s' % ('✔' if found else '·', exe,
+                                 '已安装' if found else '未安装（' + hint + '）'))
+
+    print('\n数据源：')
+    info = rn.diagnose()
+    files = info['conf_files']
+    if files:
+        for p, size in files:
+            print('  ✔ %s（%d 字节）' % (p, size))
+    else:
+        print('  ✘ 没找到 %s' % rn.CONF)
+        mark('bad', '没找到 WPS 配置文件，先确认装的是 WPS for Linux 并打开过一个文档。')
+    print('    结构化解析 %d 条 / 通用扫描 %d 条 / 合计 %d 条 / 文件存在 %d 条'
+          % (info['structured'], info['scanned'], info['total'], info['existing']))
+    if info['total'] and not info['structured']:
+        mark('warn', '结构化解析一条都没命中，但通用扫描捞到了 %d 条 —— '
+                     'WPS 大概改了键名（这正是备用解析存在的意义）。'
+                     % info['scanned'])
+    if info['total'] and not info['existing']:
+        mark('warn', '记录都在，但文件一个都不存在（移动/删除/盘没挂）。')
+
+    print('  兜底数据源：')
+    for c in rn.XBEL_CANDIDATES:
+        p = os.path.expanduser(c)
+        if os.path.exists(p):
+            n = len(rn.parse_xbel(open(p, 'rb').read().decode('utf-8', 'replace')))
+            print('    ✔ %s（%d 条本地文档）' % (p, n))
+            break
+    else:
+        print('    · 没有 GTK 最近使用记录')
+    for c in rn.CLOUD_DIRS:
+        p = os.path.expanduser(c)
+        if os.path.isdir(p):
+            print('    ✔ 云文档目录 %s' % p)
+            break
+    else:
+        print('    · 没有 WPS 云文档目录')
+
+    print('\n后台服务：')
+    for name, label in (('daemon', '守护进程'), ('bridge', '剪贴板服务'),
+                        ('hotkey', '全局热键'), ('gui', '图形窗口')):
+        running = core.is_running(name)
+        print('  %s %-6s %s' % ('✔' if running else '·', label,
+                                '运行中' if running else '未运行'))
+    if not core.is_running('bridge'):
+        mark('warn', '剪贴板服务没在跑；第一次复制会自动拉起（也可以先跑 wps-copy --start）。')
+
+    print('\n诊断结论：')
+    print('  %s' % info['hint'])
+    for msg in bad:
+        print('  ✘ %s' % msg)
+    for msg in warn:
+        print('  ! %s' % msg)
+    if not bad and not warn:
+        print('  一切正常。')
+    print('\n日志：%s' % os.path.join(core.state_dir(), 'daemon.log'))
+    print('目录：运行期 %s' % core.runtime_dir())
+    return 0 if not bad else 2
 
 
 def cmd_gui(_args):
@@ -251,6 +353,8 @@ def main(argv=None):
         return cmd_gui(args[1:])
     if args[0] in ('-s', '--status', 'status'):
         return cmd_status(args[1:])
+    if args[0] in ('--doctor', 'doctor'):
+        return cmd_doctor(args[1:])
     if args[0] in ('--migrate', 'migrate'):
         return cmd_migrate(args[1:])
     if args[0] in ('--start', 'start'):

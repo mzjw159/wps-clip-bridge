@@ -95,9 +95,16 @@ class ParseRecentTest(unittest.TestCase):
         self.conf = os.path.join(self.tmp, 'Office.conf')
         self._orig = recent.CONF
         recent.CONF = self.conf
+        # 关掉兜底数据源：否则「配置是空的」会被真实机器上的 xbel/云盘填满
+        self._orig_xbel = recent.XBEL_CANDIDATES
+        self._orig_cloud = recent.CLOUD_DIRS
+        recent.XBEL_CANDIDATES = ()
+        recent.CLOUD_DIRS = ()
 
     def tearDown(self):
         recent.CONF = self._orig
+        recent.XBEL_CANDIDATES = self._orig_xbel
+        recent.CLOUD_DIRS = self._orig_cloud
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _make(self, name, age):
@@ -174,6 +181,197 @@ class KindOfTest(unittest.TestCase):
     def test_unknown(self):
         self.assertEqual(recent.kind_of('/a.xyz'), '·')
         self.assertEqual(recent.kind_of('/noext'), '·')
+
+
+class ScanAssignmentsTest(unittest.TestCase):
+    """通用扫描：不看键名，只看值 —— 这是「WPS 升级改了键名」时的唯一保命层。"""
+
+    def test_catches_renamed_keys(self):
+        data = ('wps\\RecentList\\items\\1\\file=/home/u/\\x62a5\\x544a.docx\n')
+        self.assertEqual(recent._collect(data), {})          # 结构化落空
+        self.assertEqual(recent.scan_assignments(data),
+                         ['/home/u/报告.docx'])               # 通用扫描兜住
+
+    def test_case_insensitive_structured_keys(self):
+        data = 'wps\\recentfiles\\FILES\\2\\PATH=/home/u/b.xlsx\n'
+        self.assertIn('/home/u/b.xlsx', recent._collect(data))
+
+    def test_plain_absolute_path_value(self):
+        self.assertEqual(recent.scan_assignments('k=/home/u/a.pdf\n'),
+                         ['/home/u/a.pdf'])
+
+    def test_file_uri_value(self):
+        self.assertEqual(
+            recent.scan_assignments('k=file:///home/u/%E6%8A%A5%E5%91%8A.docx\n'),
+            ['/home/u/报告.docx'])
+
+    def test_non_document_ignored(self):
+        data = ('a=/home/u/x.txt\n'          # .txt 故意不算（配置里多是日志）
+                'b=/home/u/archive.tar.gz\n'
+                'c=/home/u/data.json\n')
+        self.assertEqual(recent.scan_assignments(data), [])
+
+    def test_wps_internal_paths_ignored(self):
+        data = ('a=/home/u/.local/share/Kingsoft/office6/templates/wps/x.dotx\n'
+                'b=/opt/Kingsoft/office6/cache/y.docx\n')
+        self.assertEqual(recent.scan_assignments(data), [])
+
+    def test_relative_and_empty_values(self):
+        self.assertEqual(recent.scan_assignments('a=relative/x.docx\nb=\n'), [])
+
+    def test_dedupes_repeated_value(self):
+        data = 'a=/home/u/same.doc\nb=/home/u/same.doc\n'
+        self.assertEqual(recent.scan_assignments(data), ['/home/u/same.doc'])
+
+    def test_long_value_skipped(self):
+        self.assertEqual(recent.scan_assignments('a=/' + 'x' * 5000 + '.docx\n'),
+                         [])
+
+
+class XbelTest(unittest.TestCase):
+    def test_extracts_local_documents(self):
+        xbel = ('<bookmark href="file:///home/u/%E6%8A%A5%E5%91%8A.docx" '
+                'modified="2026-10-01T10:00:00Z" added="2026-10-01T09:00:00Z"/>')
+        self.assertEqual(recent.parse_xbel(xbel), ['/home/u/报告.docx'])
+
+    def test_skips_remote_and_non_documents(self):
+        xbel = ('<bookmark href="http://a/b.docx" modified="x"/>'
+                '<bookmark href="file:///home/u/a.tar.gz" modified="x"/>'
+                '<bookmark href="file:///home/u/.local/share/Kingsoft/office6/x.docx"'
+                ' modified="x"/>')
+        self.assertEqual(recent.parse_xbel(xbel), [])
+
+    def test_empty_and_garbage(self):
+        for text in ('', None, '<xbel></xbel>', 'not xml at all'):
+            self.assertEqual(recent.parse_xbel(text), [])
+
+
+class CloudScanTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='wpscloud_')
+        self._orig = recent.CLOUD_DIRS
+        recent.CLOUD_DIRS = (self.tmp,)
+
+    def tearDown(self):
+        recent.CLOUD_DIRS = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make(self, rel, age):
+        p = os.path.join(self.tmp, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'w') as f:
+            f.write('x')
+        t = time.time() - age
+        os.utime(p, (t, t))
+        return p
+
+    def test_returns_documents_newest_first(self):
+        old = self._make('a/old.docx', 500)
+        new = self._make('a/b/new.xlsx', 10)
+        self.assertEqual(recent.scan_cloud_dirs(), [new, old])
+
+    def test_skips_non_documents_and_dot_dirs(self):
+        doc = self._make('keep.doc', 10)
+        self._make('a/note.log', 5)
+        self._make('.hidden/secret.docx', 1)
+        self.assertEqual(recent.scan_cloud_dirs(), [doc])
+
+    def test_missing_root_is_fine(self):
+        recent.CLOUD_DIRS = (os.path.join(self.tmp, 'nope'),)
+        self.assertEqual(recent.scan_cloud_dirs(), [])
+
+    def test_respects_max_files(self):
+        for i in range(5):
+            self._make('f%d.docx' % i, i + 1)
+        self.assertEqual(len(recent.scan_cloud_dirs(max_files=2)), 2)
+
+
+class FallbackTest(unittest.TestCase):
+    """主数据源坏了要能自动换源，而不是显示一个空列表。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='wpsfallback_')
+        self._orig = (recent.CONF, recent.XBEL_CANDIDATES, recent.CLOUD_DIRS)
+        recent.CONF = os.path.join(self.tmp, 'Office.conf')
+        with open(os.path.join(self.tmp, 'Office.conf'), 'w') as f:
+            f.write('wps\\SomethingNew\\1\\x=1\n')        # 完全没有路径
+        self.doc = os.path.join(self.tmp, '云端.docx')
+        with open(self.doc, 'w') as f:
+            f.write('x')
+        self.xbel = os.path.join(self.tmp, 'recently-used.xbel')
+        with open(self.xbel, 'w', encoding='utf-8') as f:
+            f.write('<bookmark href="file://%s" modified="x"/>' % self.doc)
+        recent.XBEL_CANDIDATES = (self.xbel,)
+        recent.CLOUD_DIRS = ()
+
+    def tearDown(self):
+        (recent.CONF, recent.XBEL_CANDIDATES,
+         recent.CLOUD_DIRS) = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_uses_xbel_when_conf_yields_nothing(self):
+        self.assertEqual(recent.parse_recent(), [self.doc])
+
+    def test_stats_record_which_source_was_used(self):
+        _, st = recent.collect()
+        self.assertEqual(st['structured'], 0)
+        self.assertEqual(st['fallback'], 'GTK 最近使用')
+
+    def test_primary_wins_when_it_works(self):
+        with open(recent.CONF, 'w') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % self.doc)
+        _, st = recent.collect()
+        self.assertEqual(st['fallback'], '')      # 主源有货就不碰兜底
+        self.assertEqual(st['structured'], 1)
+
+    def test_fallback_can_be_disabled(self):
+        self.assertEqual(recent.parse_recent(allow_fallback=False), [])
+
+
+class DiagnoseTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='wpsdiag_')
+        self._orig = (recent.CONF, recent.XBEL_CANDIDATES, recent.CLOUD_DIRS)
+        recent.XBEL_CANDIDATES = ()
+        recent.CLOUD_DIRS = ()
+
+    def tearDown(self):
+        (recent.CONF, recent.XBEL_CANDIDATES,
+         recent.CLOUD_DIRS) = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_missing_conf_says_so(self):
+        recent.CONF = os.path.join(self.tmp, 'nope.conf')
+        info = recent.diagnose()
+        self.assertIn('没找到 WPS 的最近文档配置', info['hint'])
+        self.assertEqual(info['conf_files'], [])
+
+    def test_unparsable_conf_mentions_upgrade(self):
+        recent.CONF = os.path.join(self.tmp, 'Office.conf')
+        with open(recent.CONF, 'w') as f:
+            f.write('wps\\NewFormat\\blob=QUJDREVGRw==\n')
+        info = recent.diagnose()
+        self.assertEqual(info['total'], 0)
+        self.assertIn('WPS 升级', info['hint'])
+
+    def test_records_but_missing_files(self):
+        recent.CONF = os.path.join(self.tmp, 'Office.conf')
+        with open(recent.CONF, 'w') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=/gone/a.docx\n')
+        info = recent.diagnose()
+        self.assertEqual(info['total'], 1)
+        self.assertEqual(info['existing'], 0)
+        self.assertIn('文件都不在了', info['hint'])
+
+    def test_healthy_conf_reports_count(self):
+        recent.CONF = os.path.join(self.tmp, 'Office.conf')
+        doc = os.path.join(self.tmp, 'ok.docx')
+        open(doc, 'w').close()
+        with open(recent.CONF, 'w') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % doc)
+        info = recent.diagnose()
+        self.assertEqual(info['existing'], 1)
+        self.assertIn('共 1 个文档', info['hint'])
 
 
 if __name__ == '__main__':

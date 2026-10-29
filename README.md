@@ -32,7 +32,7 @@ CLIPBOARD 持有者：Qt Selection Owner for wpsoffice
 ## 安装
 
 ```sh
-sudo apt install ./dist/wps-clip-bridge_1.0.0_all.deb
+sudo apt install ./dist/wps-clip-bridge_1.4.0_all.deb
 ```
 
 用 `apt` 而不是 `dpkg -i`，这样会自动补齐依赖（主要是 `python3-xlib`）。
@@ -112,6 +112,7 @@ wps-copy -f a.pdf b.doc # 直接指定文件，可多个
 wps-copy --start        # 启动后台服务
 wps-copy --stop         # 停止后台服务
 wps-copy --status       # 看服务 / 热键 / 窗口的状态
+wps-copy --doctor       # 自检：数据源命中数、依赖、会话类型
 wps-copy --migrate      # 清理旧的手工部署
 ```
 
@@ -119,6 +120,60 @@ wps-copy --migrate      # 清理旧的手工部署
 
 WPS 云文档在本地通常留有一份缓存副本，这些也会出现在列表里，类型列标记为「云」。
 纯在线的、本地没有任何落盘文件的文档无法复制 —— 没有文件对象就没有可粘贴的东西。
+
+---
+
+## 数据从哪来：WPS 升级了怎么办
+
+Office.conf 是 **WPS 内部私有格式，不是公开接口**。它哪天把 `RecentFiles` 改个名、
+把转义换个写法，只认键名的解析就会静默返回空列表 —— 这是这类工具的先天风险。
+所以最近文档分三层取，任何一层有收获就用：
+
+| 层 | 做法 | 抗什么 |
+|---|---|---|
+| 1. 结构化 | 按键名 `wps\RecentFiles\files\N\path=` 解析 | 正常情况，能拿到序号 |
+| 2. 通用扫描 | 同一个文件里，凡是「值像被转义的绝对路径、且指向真实文档」的键值对全部收下 | **键名/层级被改名** |
+| 3. 兜底源 | 主源一条都读不出时，改用 GTK 的 `recently-used.xbel` 和 `~/文档/WPS Cloud Files` 里最近改过的文档 | 配置彻底读不出来 |
+
+配置文件本身也有兜底：`~/.config/Kingsoft/Office.conf`、`~/.config/kingsoft/Office.conf`、
+`~/.config/Kingsoft/office.conf` 都试。
+
+**最坏情况**（WPS 把值改成加密/base64，连路径形态都没有）三层都无能为力，
+但这时不会静默：状态栏会说「WPS 的配置里没解析出任何文档路径 —— 多半是 WPS
+升级后改了格式」，并把 tooltip 里的明细和 `wps-copy --doctor` 指给你。
+
+判断当前机器到底走的哪一层：
+
+```sh
+wps-copy --doctor
+```
+
+它会打印会话类型（X11 / Wayland）、依赖、配置文件的命中数
+（`结构化 35 条 / 通用扫描 35 条`）、兜底源是否存在、三个后台进程的状态。
+把这个输出发出来，基本能定位所有「列表是空的」问题。
+
+---
+
+## 把安装包发给别人
+
+可以，但要**用 `apt` 装，不要 `dpkg -i`**：
+
+```sh
+sudo apt install ./wps-clip-bridge_1.4.0_all.deb
+```
+
+`apt` 会补齐 `python3-xlib`、`python3-gi`、`gir1.2-gtk-3.0`；`dpkg -i` 不会，
+缺东西时程序会打印一段中文提示而不是崩掉（v1.4.0 起）。包是
+`Architecture: all` 的纯 Python，amd64 / arm64 通用。
+
+对方机器上需要满足：
+
+- 装的是 **WPS for Linux**（`~/.config/Kingsoft/Office.conf` 存在），且至少打开过一个文档；
+- 桌面是 X11 或 Wayland（Wayland 下通过 XWayland 工作，见「已知限制」）；
+- 有 `~/.config` 写权限（普通用户都有）。
+
+装好后让对方跑一次 `wps-copy --doctor`，把输出对一下「解析」那几行的条数，
+就知道他那边是不是和你的效果一致。
 
 ---
 
@@ -223,7 +278,7 @@ python3 -m wpsclip.daemon        # 看护进程（依次拉起 bridge + hotkey�
 
 ### 跑测试
 
-纯函数部分有单元测试（`tests/`，107 个用例），不需要图形界面，也不碰你的
+纯函数部分有单元测试（`tests/`，137 个用例），不需要图形界面，也不碰你的
 真实配置（每个用例都在临时目录里跑）：
 
 ```sh
@@ -231,6 +286,7 @@ python3 -m unittest discover -s tests          # 全跑，约 1 秒
 python3 -m unittest discover -s tests -v       # 逐个用例
 python3 -m unittest tests.test_recent -v       # 只跑解析层
 python3 -m unittest tests.test_service -v      # 只跑复制编排
+python3 -m unittest tests.test_recent -v       # 只跑解析与多源兜底
 ```
 
 覆盖 `unesc()` 的「2~4 位十六进制」边界、`parse_uris()` 的百分号解码、
@@ -278,7 +334,8 @@ PYTHONPATH=src python3 -c "from wpsclip.core import clipboard_has; print(clipboa
 wps-clip-bridge/
 ├── src/wpsclip/             Python 包
 │   ├── core.py              路径、配置、日志、单实例锁、剪贴板读取
-│   ├── recent.py            解析 WPS 的 Office.conf
+│   ├── bootstrap.py         入口脚本的友好启动（缺依赖给人话）
+│   ├── recent.py            最近文档：三层解析 + 兜底源 + 自检诊断
 │   ├── bridge.py            常驻剪贴板服务
 │   ├── service.py           服务编排：确保在跑、异步复制、确认结果
 │   ├── cli.py               命令行 wps-copy
@@ -377,7 +434,9 @@ WPS 没有提供可用的对外接口。`~/.config/Kingsoft/Office.conf` 是它�
 - **热键只在 X11 / XWayland 应用前台时有效。** WPS、微信、文件管理器都是 XWayland
   客户端，所以日常够用；但如果当前焦点在 Wayland 原生应用（如某些 GTK4 程序）上，
   X11 的 `grab_key` 收不到按键。这是 X11 键盘抓取的固有限制，无解。
-- **`Ctrl+Alt+C` 可能被其他程序占用。** 冲突时热键起不来，可改配置换一个组合。
+- **`Ctrl+Alt+C` 可能被其他程序占用。** 抢不到时会弹一条通知并写进日志，
+  在设置里换一个组合键即可（X 的 GrabKey 冲突只会异步返回 BadAccess，
+  v1.3.0 之前是完全静默的）。
 - **只列本机存在文件。** 纯云端、本地无落盘文件的文档没有可复制的对象。
 - **`python3-xlib` 来自 `universe` 源。** 如果目标机器禁用了 universe，
   `apt install` 会报缺依赖，需要先启用源或手动装这个包。
@@ -387,6 +446,7 @@ WPS 没有提供可用的对外接口。`~/.config/Kingsoft/Office.conf` 是它�
 ## 排障
 
 ```sh
+wps-copy --doctor                     # 先跑这个：数据源/依赖/会话/服务一次看全
 wps-copy --status                     # 三个组件是否都在跑
 tail -n 40 ~/.local/state/wps-clip-bridge/daemon.log
 tail -n 40 ~/.local/state/wps-clip-bridge/bridge.log

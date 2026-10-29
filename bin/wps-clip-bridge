@@ -3,8 +3,8 @@
 """常驻剪贴板服务。"""
 import sys
 
-from wpsclip.bridge import main
+from wpsclip.bootstrap import run
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(run('wpsclip.bridge'))

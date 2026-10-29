@@ -3,8 +3,8 @@
 """命令行：列出并复制 WPS 最近文档。"""
 import sys
 
-from wpsclip.cli import main
+from wpsclip.bootstrap import run
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(run('wpsclip.cli'))

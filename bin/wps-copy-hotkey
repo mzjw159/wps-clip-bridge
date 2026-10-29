@@ -3,8 +3,8 @@
 """全局热键守护：按组合键弹出选择窗口。"""
 import sys
 
-from wpsclip.hotkey import main
+from wpsclip.bootstrap import run
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(run('wpsclip.hotkey'))

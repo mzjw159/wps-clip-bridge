@@ -1,3 +1,26 @@
+wps-clip-bridge (1.4.0) unstable; urgency=medium
+
+  * 最近文档改成三层解析，WPS 升级不再让列表静默变空：
+    - 第一层按键名结构化解析（原来只有这一层）；
+    - 第二层「通用扫描」：同一个配置文件里，凡是值像被转义的绝对路径、
+      指向真实文档的键值对全部收进来 —— 键名怎么改都不受影响；
+    - 第三层兜底：主源一条都读不出时，改用 GTK 的 recently-used.xbel
+      和 WPS 云文档本地目录里最近改过的文档；
+    - 配置文件还支持大小写变体与 ~/.config/kingsoft/ 别名。
+  * 空列表不再是一句「没读到最近文档」：会区分「没装 WPS / 格式变了 /
+    文件被删了」，状态栏给结论、tooltip 给明细。
+  * 新增 wps-copy --doctor 自检：会话类型、依赖、各数据源命中数、
+    兜底源是否存在、三个后台进程状态，一次全打出来。
+  * 热键被其他程序占用时会明确通知并写日志（X 的 GrabKey 冲突只会
+    异步返回 BadAccess，原来完全静默）。
+  * 入口脚本改用 bootstrap.run()：缺 python3-xlib 之类的依赖时，
+    给一句中文提示和可直接复制的 apt 命令，而不是英文 traceback。
+  * deb 补 Recommends：托盘（appindicator）与通知（libnotify-bin）。
+  * 测试 113 -> 137 个：通用扫描（键名被改、脏值过滤）、xbel 解析、
+    云目录扫描、兜底切换、四类诊断结论。
+
+ -- shuai <shuai@localhost>  Thu, 29 Oct 2026 19:50:00 +0800
+
 wps-clip-bridge (1.3.0) unstable; urgency=medium
 
   * 复制链路改为后台线程执行，点一下不再卡三秒：

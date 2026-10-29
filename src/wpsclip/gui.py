@@ -538,6 +538,26 @@ class App(object):
         return func
 
     # ------------------------------------------------ 数据
+    @staticmethod
+    def _diagnose_detail(info):
+        """空列表时的多行明细（挂在状态栏 tooltip 上）。"""
+        lines = [info.get('hint', '')]
+        files = info.get('conf_files') or []
+        if files:
+            for p, size in files:
+                lines.append('配置：%s（%d 字节）' % (p, size))
+        else:
+            lines.append('配置：没找到 %s' % recent.CONF)
+        lines.append('解析：结构化 %d 条 / 通用扫描 %d 条 / 共 %d 条，'
+                     '其中 %d 个文件存在'
+                     % (info.get('structured', 0), info.get('scanned', 0),
+                        info.get('total', 0), info.get('existing', 0)))
+        if info.get('fallback'):
+            lines.append('兜底数据源：%s（%d 条）'
+                         % (info['fallback'], info.get('fallback_hits', 0)))
+        lines.append('详细自检：wps-copy --doctor')
+        return '\n'.join(lines)
+
     def reload(self):
         self.store.clear()
         kw = self.entry.get_text().strip().lower()
@@ -580,10 +600,16 @@ class App(object):
         if total:
             self.set_status('共 %d 个文档 · 双击复制、拖到微信，Ctrl/Shift 可多选'
                             % total)
+            self.status.set_tooltip_text(None)
         elif kw:
             self.set_status('没有匹配「%s」的文档' % kw)
+            self.status.set_tooltip_text(None)
         else:
-            self.set_status('没读到最近文档。请先用 WPS 打开几个文件，再点刷新。')
+            # 列表空的三种原因（没装 WPS / 格式变了 / 文件被删）要分清，
+            # 否则用户只看到一句「没读到最近文档」，不知道该找谁。
+            info = recent.diagnose()
+            self.set_status(info['hint'])
+            self.status.set_tooltip_text(self._diagnose_detail(info))
 
     def on_search(self, *_):
         self.reload()
