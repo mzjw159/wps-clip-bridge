@@ -3,12 +3,16 @@
 ## 构建
 
 ```sh
-./build.sh              # 输出到本项目 dist/
+./build.sh              # 输出到本项目 dist/，并清掉同包名的旧版本
 ./build.sh --check      # 额外打印包内容并校验 desktop 文件语法
 OUT=/tmp/out ./build.sh # 换个输出目录
 ```
 
 只依赖 `dpkg-deb` 和 `gzip`，不需要 `debhelper` / `fakeroot`（用 `--root-owner-group`）。
+
+`dist/` 里只保留当前版本：打完包会把 `wps-clip-bridge_*_all.deb` 里其它版本的删掉，
+所以 `sudo apt install ./dist/wps-clip-bridge_*.deb` 永远只会命中一个文件，不用挑版本。
+历史版本在 GitHub Release 和 apt 源里，本地不用囤。
 
 构建完再看一眼包里的东西对不对：
 
@@ -17,8 +21,8 @@ OUT=/tmp/out ./build.sh # 换个输出目录
 ./tools/check-deb.sh dist/wps-clip-bridge_1.7.2_all.deb
 ```
 
-不带参数时按 `debian/control` 的版本号去找对应的包 —— `dist/` 里留着历史版本，
-随便抓一个会把旧包的版本号跟 control 比，报「不一致」。一次只能检查一个包。
+不带参数时按 `debian/control` 的版本号去找对应的包 —— 手工传路径时容易抓到别的版本，
+把旧包的版本号跟 control 比就会报「不一致」。一次只能检查一个包。
 
 它不装包、也不解包到磁盘，直接打开 `.deb` 读里面的文件做断言：菜单项的 `Name`、
 `Icon` 和实际图标文件对不对得上、`Exec` 指向的二进制在不在包里、控制脚本有没有
@@ -152,7 +156,7 @@ gh-pages 分支根目录
 ### 加包 / 重新生成
 
 ```sh
-tools/build-apt-repo.py <站点根目录> dist/wps-clip-bridge_1.8.0_all.deb
+tools/build-apt-repo.py <站点根目录> dist/wps-clip-bridge_<版本>_all.deb
 ```
 
 它会把 deb 拷进 `pool/`，然后**全量重扫 pool** 重新生成 `Packages`、`Packages.gz`

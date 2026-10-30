@@ -133,6 +133,16 @@ echo "    已安装大小：${SIZE} KB"
 echo "==> 打包"
 dpkg-deb --build --root-owner-group "$R" "$OUT/$NAME.deb" >/dev/null
 
+# 产物目录只留当前版本：清掉同包名的其他 .deb，免得历史包越堆越多，
+# 也让 README 里的 `apt install ./dist/wps-clip-bridge_*.deb` 不用挑版本。
+# 只匹配 "${PKG}_*_${ARCH}.deb"，不会碰到目录里的别的文件。
+for old in "$OUT/$PKG"_*_"$ARCH".deb; do
+    [ -f "$old" ] || continue
+    [ "$(basename "$old")" = "$NAME.deb" ] && continue
+    rm -f "$old"
+    echo "    清理旧包：$(basename "$old")"
+done
+
 echo ""
 echo "构建完成：$OUT/$NAME.deb"
 ls -lh "$OUT/$NAME.deb" | awk '{print "    体积：" $5}'
