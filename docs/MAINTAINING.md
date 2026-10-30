@@ -70,6 +70,11 @@ tag 推上去后 `.github/workflows/release.yml` 依次做：
 Release 已存在时走「更新说明 + 覆盖附件」，所以同一个 tag 重推、或手动
 `workflow_dispatch` 重跑都不会报错。
 
+注意 `workflow_dispatch` 重跑时 **checkout 的是那个 tag，不是 master**：想改
+Release 标题或说明就得先改 `debian/changelog`、重新打 tag（删了再打），否则
+重跑出来还是旧文案。只改标题的话也可以直接
+`gh release edit v1.11.0 --title "..."`，但下次从这个 tag 重跑会被覆盖回去。
+
 > **一次性设置**：仓库的 Settings → Actions → General → Workflow permissions
 > 要允许 *Read and write permissions*，否则第 5 步会报
 > `Resource not accessible by integration`。workflow 里已经声明了
