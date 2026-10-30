@@ -12,7 +12,7 @@ import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {
@@ -41,7 +41,14 @@ DEFAULTS = {
         # 复制成功后发系统通知
         'notify_on_copy': 'true',
         # 托盘后端：auto / indicator / statusicon
+        # （界面上不再暴露：三者图标与位置都一样，只在极老的面板上才有差别，
+        #  留这个键是给排查问题用的）
         'tray_backend': 'auto',
+        # 上次关闭时的窗口位置与大小（-1 表示还没记过）
+        'window_x': '-1',
+        'window_y': '-1',
+        'window_w': '0',
+        'window_h': '0',
     },
 }
 

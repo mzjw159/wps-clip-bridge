@@ -125,15 +125,22 @@ class Tray(object):
 
     # ------------------------------------------------------------ 后端 2
     def _start_indicator(self):
-        repo = __import__('gi.repository', fromlist=['repository'])
+        # 注意别用 __import__('gi.repository', fromlist=[...])：它在某些
+        # PyGObject 版本上拿不到子模块，抛 ImportError 把回退链打断。
+        import gi.repository as repo
         for name in ('AyatanaAppIndicator3', 'AppIndicator3'):
             try:
                 gi.require_version(name, '0.1')
             except Exception:
                 continue
-            try:
-                AppIndicator = getattr(repo, name)
-            except Exception:
+            AppIndicator = getattr(repo, name, None)
+            if AppIndicator is None:
+                try:
+                    AppIndicator = __import__(
+                        'gi.repository.' + name, fromlist=[name]).__dict__[name]
+                except Exception:
+                    AppIndicator = None
+            if AppIndicator is None:
                 continue
             if self._new_indicator(AppIndicator, name):
                 return True

@@ -49,6 +49,9 @@ except Exception:
 
 WAKE_POLL_MS = 400
 
+# 窗口四周用于拖拽缩放的热区宽度（像素）
+GRIP = 5
+
 # TreeStore 列索引
 C_ISGROUP, C_ICON, C_NAME, C_SOURCE, C_TYPE, C_SIZE, C_DIR, C_WHEN, C_PATH, C_MTIME = range(10)
 
@@ -56,6 +59,23 @@ C_ISGROUP, C_ICON, C_NAME, C_SOURCE, C_TYPE, C_SIZE, C_DIR, C_WHEN, C_PATH, C_MT
 _BUCKETS = ('今天', '昨天', '近 3 天', '近 7 天', '近 30 天', '更早')
 
 _SOURCE_COLOR = {'云端': '#2f7bd6', '微信': '#07c160', '本地': '#8a8f98'}
+
+def clamp_window_pos(x, y, w, h, screen_w, screen_h, keep=120):
+    """把记住的窗口坐标拉回可见范围。
+
+    换显示器、改分辨率、拔掉外接屏之后，上次的位置可能整个落到屏幕外，
+    直接 move() 过去就是「窗口打开了但看不见」。这里保证至少 keep×keep
+    的一块留在屏内。
+    """
+    try:
+        x = int(x)
+        y = int(y)
+    except (TypeError, ValueError):
+        return None
+    max_x = max(0, int(screen_w) - keep)
+    max_y = max(0, int(screen_h) - keep)
+    return (min(max(x, 0), max_x), min(max(y, 0), max_y))
+
 
 CSS = b"""
 .toolbar { padding: 10px 12px 2px 12px; }
@@ -267,38 +287,46 @@ class App(object):
         self.win.connect('key-press-event', self.on_key)
         self._load_css()
 
-        # 标题栏
-        hb = Gtk.HeaderBar()
-        hb.set_show_close_button(True)
-        hb.set_title('WPS 最近文档')
-        hb.set_subtitle('双击复制 · 可拖到微信 · Ctrl/Shift 多选')
-        self.win.set_titlebar(hb)
-
-        self.settings_btn = Gtk.Button()
-        self.settings_btn.set_image(Gtk.Image.new_from_icon_name(
-            'emblem-system-symbolic', Gtk.IconSize.BUTTON))
-        self.settings_btn.set_tooltip_text('设置（快捷键、主题、托盘、开机启动）')
-        self.settings_btn.connect('clicked', lambda *a: self.open_settings())
-        hb.pack_end(self.settings_btn)
-
-        self.refresh_btn = Gtk.Button()
-        self.refresh_btn.set_image(Gtk.Image.new_from_icon_name(
-            'view-refresh-symbolic', Gtk.IconSize.BUTTON))
-        self.refresh_btn.set_tooltip_text('刷新列表')
-        self.refresh_btn.connect('clicked', lambda *a: self.reload())
-        hb.pack_end(self.refresh_btn)
+        # 用系统原生标题栏（不再自绘 HeaderBar）。
+        # 自绘的那套是客户端装饰：这台机器的 KWin 不认 CSD 边框，鼠标按在
+        # 窗口边上只会移动窗口、拉不动大小，程序自己加热区也没用 —— KWin 在
+        # 事件到达之前就把边缘那十几像素吃掉了。交给窗管画边框，拖动缩放、
+        # 双击最大化这些行为就都跟系统里其它程序一致。
+        self.win.set_title('WPS 最近文档')
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_border_width(12)
-        self.win.add(box)
+        # 窗口边框交给窗管画了，但这套 KWin 的边框是 0 宽（_NET_FRAME_EXTENTS
+        # 左右下都是 0），鼠标没处可抓。自己再铺一圈 5px 的热区，按下去用
+        # _NET_WM_MOVERESIZE 让窗管来缩放，等于把「可抓的边」补回来。
+        self.grip_grid = Gtk.Grid()
+        box.set_hexpand(True)
+        box.set_vexpand(True)
+        self.grip_grid.attach(box, 1, 1, 1, 1)
+        self._install_resize_grips(self.grip_grid)
+        self.win.add(self.grip_grid)
 
-        # 搜索栏
+        # 工具栏：搜索框 + 两个按钮（原来的标题栏按钮挪到这里）
         toolbar = Gtk.Box(spacing=8)
         toolbar.get_style_context().add_class('toolbar')
         self.entry = Gtk.SearchEntry()
         self.entry.set_placeholder_text('搜索文件名或文件夹…')
         self.entry.connect('search-changed', self.on_search)
         toolbar.pack_start(self.entry, True, True, 0)
+
+        self.refresh_btn = Gtk.Button()
+        self.refresh_btn.set_image(Gtk.Image.new_from_icon_name(
+            'view-refresh-symbolic', Gtk.IconSize.BUTTON))
+        self.refresh_btn.set_tooltip_text('刷新列表')
+        self.refresh_btn.connect('clicked', lambda *a: self.reload())
+        toolbar.pack_start(self.refresh_btn, False, False, 0)
+
+        self.settings_btn = Gtk.Button()
+        self.settings_btn.set_image(Gtk.Image.new_from_icon_name(
+            'emblem-system-symbolic', Gtk.IconSize.BUTTON))
+        self.settings_btn.set_tooltip_text('设置（快捷键、主题、托盘、开机启动）')
+        self.settings_btn.connect('clicked', lambda *a: self.open_settings())
+        toolbar.pack_start(self.settings_btn, False, False, 0)
         box.pack_start(toolbar, False, False, 0)
 
         # 列表（两级：分组 -> 文档）
@@ -435,6 +463,8 @@ class App(object):
 
         self._setup_tray()
         self.reload()
+        # 先摆回上次关闭时的位置和大小，再显示（顺序反了会被默认尺寸覆盖）
+        self._restore_geometry()
         self.win.show_all()
         # 配了「启动时待在托盘」就不弹窗，但托盘必须存在，否则窗口无处唤回
         if core.conf_bool('ui', 'start_hidden', False) and self.tray_available():
@@ -448,6 +478,151 @@ class App(object):
             service.warmup()
         threading.Thread(target=work, name='wps-warmup', daemon=True).start()
         return False
+
+    # ------------------------------------------------ 窗口几何
+    def _install_resize_grips(self, grid):
+        """四边四角各放一条透明热区，按下去交给窗管缩放。
+
+        KWin 给这个窗口的边框是 0 宽，鼠标按在边上等于按在桌面，
+        根本抓不住。自己在窗口内侧铺 5px 的热区，用 begin_resize_drag
+        把动作转给窗管，拖动边缘/四角就能改大小了。
+        """
+        # (列, 行, 边缘, 光标)
+        specs = (
+            (0, 0, Gdk.WindowEdge.NORTH_WEST, 'nw-resize'),
+            (1, 0, Gdk.WindowEdge.NORTH, 'n-resize'),
+            (2, 0, Gdk.WindowEdge.NORTH_EAST, 'ne-resize'),
+            (0, 1, Gdk.WindowEdge.WEST, 'w-resize'),
+            (2, 1, Gdk.WindowEdge.EAST, 'e-resize'),
+            (0, 2, Gdk.WindowEdge.SOUTH_WEST, 'sw-resize'),
+            (1, 2, Gdk.WindowEdge.SOUTH, 's-resize'),
+            (2, 2, Gdk.WindowEdge.SOUTH_EAST, 'se-resize'),
+        )
+        self._grips = []
+        for col, row, edge, cursor_name in specs:
+            grip = Gtk.EventBox()
+            # 必须有自己的 GdkWindow 才收得到按键：set_visible_window(False)
+            # 会连窗口一起去掉（get_has_window() → False），点了没反应。
+            grip.override_background_color(
+                Gtk.StateFlags.NORMAL, Gdk.RGBA(0, 0, 0, 0))
+            grip.set_size_request(GRIP, GRIP)
+            grip.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                            | Gdk.EventMask.BUTTON_RELEASE_MASK
+                            | Gdk.EventMask.POINTER_MOTION_MASK)
+            grip.connect('button-press-event', self._grip_press, edge)
+            grip.connect('motion-notify-event', self._grip_motion)
+            grip.connect('button-release-event', self._grip_release)
+            grip.connect('realize', self._grip_realize, cursor_name)
+            grid.attach(grip, col, row, 1, 1)
+            self._grips.append(grip)
+
+    @staticmethod
+    def _grip_realize(grip, cursor_name):
+        try:
+            cur = Gdk.Cursor.new_from_name(Gdk.Display.get_default(), cursor_name)
+            grip.get_window().set_cursor(cur)
+        except Exception:
+            pass
+
+    def _grip_press(self, grip, event, edge):
+        """按在热区上：记下起点，之后按鼠标位移改窗口大小。
+
+        不用 begin_resize_drag 交给窗管 —— 这台机器的 KWin 收下请求却不动
+        窗口；也不用 seat.grab —— 按下按钮时 X 本来就会给这个窗口隐式抓取，
+        motion / release 都会照常送到抓手上来。
+        """
+        if event.button != 1:
+            return False
+        try:
+            x, y = self.win.get_position()
+            w, h = self.win.get_size()
+        except Exception:
+            return False
+        self._drag = {
+            'edge': edge,
+            'x0': int(event.x_root),
+            'y0': int(event.y_root),
+            'geo': (x, y, w, h),
+        }
+        return True
+
+    def _grip_motion(self, _grip, event):
+        drag = getattr(self, '_drag', None)
+        if not drag or not (event.state & Gdk.ModifierType.BUTTON1_MASK):
+            return False
+        x, y, w, h = drag['geo']
+        dx = int(event.x_root) - drag['x0']
+        dy = int(event.y_root) - drag['y0']
+        nick = drag['edge'].value_nick
+        min_w, min_h = 520, 360
+        if 'west' in nick:
+            nw = max(min_w, w - dx)
+            x = x + (w - nw)
+            w = nw
+        elif 'east' in nick:
+            w = max(min_w, w + dx)
+        if 'north' in nick:
+            nh = max(min_h, h - dy)
+            y = y + (h - nh)
+            h = nh
+        elif 'south' in nick:
+            h = max(min_h, h + dy)
+        try:
+            self.win.move(x, y)
+            self.win.resize(w, h)
+        except Exception as ex:
+            core.log('拖动缩放失败: %r' % (ex,))
+        return True
+
+    def _grip_release(self, _grip, event):
+        if getattr(self, '_drag', None):
+            self._drag = None
+            return True
+        return False
+
+    def _save_geometry(self):
+        """记住关闭时的位置和大小（下一次点托盘直接回到原处）。"""
+        try:
+            if self.win.get_window() is None:
+                return
+            state = self.win.get_window().get_state()
+            if state & Gdk.WindowState.MAXIMIZED:
+                # 最大化时记的是屏幕尺寸，还原出来就成了「全屏窗口」
+                return
+            x, y = self.win.get_position()
+            w, h = self.win.get_size()
+            core.save_conf({
+                ('ui', 'window_x'): x,
+                ('ui', 'window_y'): y,
+                ('ui', 'window_w'): w,
+                ('ui', 'window_h'): h,
+            })
+        except Exception as ex:
+            core.log('保存窗口位置失败: %r' % (ex,))
+
+    def _restore_geometry(self):
+        x = core.conf_int('ui', 'window_x', -1)
+        y = core.conf_int('ui', 'window_y', -1)
+        w = core.conf_int('ui', 'window_w', 0)
+        h = core.conf_int('ui', 'window_h', 0)
+        try:
+            if w >= 480 and h >= 320:
+                self.win.resize(w, h)
+        except Exception:
+            pass
+        if x < 0 or y < 0:
+            return
+        try:
+            screen = Gdk.Screen.get_default()
+            pos = clamp_window_pos(x, y, w, h,
+                                   screen.get_width(), screen.get_height())
+        except Exception:
+            pos = None
+        if pos:
+            try:
+                self.win.move(pos[0], pos[1])
+            except Exception:
+                pass
 
     # ------------------------------------------------ 托盘 / 设置
     def _setup_tray(self):
@@ -485,6 +660,7 @@ class App(object):
         return ok
 
     def quit_app(self, *_):
+        self._save_geometry()
         try:
             if self.tray is not None:
                 self.tray.stop()
@@ -913,6 +1089,7 @@ class App(object):
     def on_close_window(self, *_):
         """点关闭时：配了「收进托盘」且托盘可用就只隐藏。"""
         if core.conf_bool('ui', 'close_to_tray', True) and self.tray_available():
+            self._save_geometry()
             self.win.hide()
             self.set_status('已收进托盘，快捷键随时唤回')
             return True
@@ -922,6 +1099,7 @@ class App(object):
     def on_key(self, widget, event):
         if event.keyval == Gdk.KEY_Escape:
             if core.conf_bool('ui', 'close_to_tray', True) and self.tray_available():
+                self._save_geometry()
                 self.win.hide()
             else:
                 self.quit_app()

@@ -1,3 +1,26 @@
+wps-clip-bridge (1.7.0) unstable; urgency=medium
+
+  * 窗口可以拖边缘、拖四角改大小了。
+    原来用的是 Gtk.HeaderBar（客户端装饰），这台机器的 KWin 只把它当普通
+    窗口：按在边上拖动是「移动窗口」，尺寸一点不变。现在标题栏交回窗管画
+    （原生最小化/最大化/关闭），并在窗口内侧铺一圈 5px 的热区；按下热区后
+    由程序自己按鼠标位移改宽高 —— KWin 会收下 begin_resize_drag 请求却不
+    执行，所以这一步只能自己来。
+  * 记住窗口位置和大小：关到托盘或退出时存进 config.ini，下次点托盘回到
+    原处。换显示器/改分辨率后，旧坐标会先夹回可见范围（至少留 120px），
+    不会出现「打开了但看不见」。
+  * 设置窗口底部的「恢复默认 / 取消 / 保存」补上了边距，不再贴着右下角。
+  * 去掉设置里的「托盘图标样式」三个选项：它选的是跟面板说话用哪套协议，
+    图标长什么样、点一下有没有反应都不变，对普通用户没有决策价值。
+    改为一句说明；排查问题时仍可手改 config.ini 的 ui.tray_backend。
+  * 顺手修 libappindicator 回退链：原来用 __import__('gi.repository',
+    fromlist=[...])，在部分 PyGObject 上抛 ImportError 把回退打断，
+    托盘直接没了。现在改用正常的 import，取不到就干净地跳下一个后端。
+  * 测试 179 -> 185：新增窗口坐标夹取（clamp_window_pos）与「设置里不该
+    再出现托盘下拉」的用例。
+
+ -- shuai <shuai@localhost>  Fri, 30 Oct 2026 10:20:00 +0800
+
 wps-clip-bridge (1.6.0) unstable; urgency=medium
 
   * 托盘图标改成程序自己实现的 StatusNotifierItem（新增 src/wpsclip/sni.py），

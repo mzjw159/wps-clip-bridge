@@ -267,6 +267,18 @@ class SettingsDialog(Gtk.Dialog):
         save = self.add_button('保存', Gtk.ResponseType.OK)
         save.get_style_context().add_class('suggested-action')
 
+        # 动作按钮原来贴着右下角（ukui 主题的 action area 边距是 0），
+        # 看着像溢出屏幕。给它补上跟内容区一致的呼吸空间。
+        try:
+            area = self.get_action_area()
+            area.set_margin_start(16)
+            area.set_margin_end(16)
+            area.set_margin_top(4)
+            area.set_margin_bottom(14)
+            area.set_spacing(8)
+        except Exception:
+            pass
+
         # 内容区可滚动、动作按钮固定底部：小屏笔记本（768 高的机器很常见）
         # 上原来的窗口比屏幕还高，底部按钮被挤到屏幕外，只能盲按回车。
         outer = self.get_content_area()
@@ -365,21 +377,15 @@ class SettingsDialog(Gtk.Dialog):
         self.chk_notify.set_active(core.conf_bool('ui', 'notify_on_copy', True))
         vbox.pack_start(self.chk_notify, False, False, 0)
 
-        # 托盘图标样式：程序自己实现了 StatusNotifierItem，左键点图标即显示
-        # 窗口；libappindicator 做不到这件事（左键只能是弹菜单），留作兜底。
-        row_backend = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        row_backend.pack_start(self._label('托盘图标样式'), False, False, 0)
-        self.cmb_backend = Gtk.ComboBoxText()
-        for key, text in (('auto', '自动（推荐：单击图标即显示窗口）'),
-                          ('indicator', '兼容模式（左键弹菜单）'),
-                          ('statusicon', '经典图标（仅老面板）')):
-            self.cmb_backend.append(key, text)
-        cur_backend = core.conf('ui', 'tray_backend', 'auto').strip().lower()
-        self.cmb_backend.set_active_id(
-            cur_backend if cur_backend in ('auto', 'indicator', 'statusicon')
-            else 'auto')
-        row_backend.pack_start(self.cmb_backend, False, False, 0)
-        vbox.pack_start(row_backend, False, False, 0)
+        # 托盘图标样式原来是个三选下拉（自动 / 兼容 / 经典），但用户看不出
+        # 任何变化 —— 它选的是「跟面板说话用哪套协议」，图标长相和位置都一样，
+        # 只在极老的面板上才有区别。普通用户没有决策价值，改回一句说明。
+        tray_tip = Gtk.Label(label='托盘：左键单击图标显示窗口，右键是菜单')
+        tray_tip.set_xalign(0)
+        tray_tip.set_margin_start(12)
+        tray_tip.set_line_wrap(True)
+        tray_tip.get_style_context().add_class('dim-label')
+        vbox.pack_start(tray_tip, False, False, 0)
         box.pack_start(vbox, False, False, 0)
 
         # ---- 启动
@@ -505,7 +511,6 @@ class SettingsDialog(Gtk.Dialog):
             'hide_after_copy': self.chk_hide_after.get_active(),
             'start_hidden': self.chk_start_hidden.get_active(),
             'notify_on_copy': self.chk_notify.get_active(),
-            'tray_backend': self.cmb_backend.get_active_id() or 'auto',
             'autostart': self.chk_autostart.get_active(),
         }
 
@@ -538,7 +543,6 @@ class SettingsDialog(Gtk.Dialog):
             ('ui', 'hide_after_copy'): 'true' if v['hide_after_copy'] else 'false',
             ('ui', 'start_hidden'): 'true' if v['start_hidden'] else 'false',
             ('ui', 'notify_on_copy'): 'true' if v['notify_on_copy'] else 'false',
-            ('ui', 'tray_backend'): v['tray_backend'],
         })
         apply_theme(v['theme'])
         service.restart_hotkey()
@@ -571,7 +575,6 @@ class SettingsDialog(Gtk.Dialog):
         self.chk_hide_after.set_active(d['ui']['hide_after_copy'] == 'true')
         self.chk_start_hidden.set_active(d['ui']['start_hidden'] == 'true')
         self.chk_notify.set_active(d['ui']['notify_on_copy'] == 'true')
-        self.cmb_backend.set_active_id(d['ui'].get('tray_backend', 'auto'))
 
 
 def open_settings(parent=None):

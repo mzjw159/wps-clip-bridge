@@ -156,6 +156,36 @@ class HumanSizeTest(unittest.TestCase):
         self.assertEqual(gui.human_size(1024 ** 4), '1024.0 GB')
 
 
+
+class ClampWindowPosTest(unittest.TestCase):
+    """记住的窗口坐标要能安全还原：换屏、改分辨率后不能跑到屏幕外。"""
+
+    def test_normal_position_kept(self):
+        self.assertEqual(gui.clamp_window_pos(300, 200, 800, 600, 1920, 1080),
+                         (300, 200))
+
+    def test_negative_pulled_back(self):
+        # 上次在左边那块副屏上，现在只剩主屏 -> 不能留在负坐标
+        self.assertEqual(gui.clamp_window_pos(-500, -300, 800, 600, 1920, 1080),
+                         (0, 0))
+
+    def test_beyond_screen_pulled_back(self):
+        x, y = gui.clamp_window_pos(3000, 2000, 800, 600, 1920, 1080)
+        self.assertLess(x, 1920)
+        self.assertLess(y, 1080)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
+
+    def test_keeps_a_grab_handle_visible(self):
+        # 至少留 120px 在屏内，鼠标够得着拖回来
+        x, y = gui.clamp_window_pos(1910, 1070, 800, 600, 1920, 1080)
+        self.assertLessEqual(x, 1920 - 120)
+        self.assertLessEqual(y, 1080 - 120)
+
+    def test_garbage_returns_none(self):
+        self.assertIsNone(gui.clamp_window_pos(None, None, 0, 0, 1920, 1080))
+
+
 if __name__ == '__main__':
     if _IMPORT_ERR is not None:
         print('跳过：无法导入 gui（%r）' % (_IMPORT_ERR,))

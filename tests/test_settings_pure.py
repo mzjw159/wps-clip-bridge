@@ -76,5 +76,28 @@ class MaxHeightTest(unittest.TestCase):
         self.assertLess(settings.content_max_height(), sh)
 
 
+@_need_gi
+class TrayOptionTest(unittest.TestCase):
+    """托盘样式那个下拉已经拿掉了，别再偷偷长回来。"""
+
+    def test_no_tray_backend_in_values(self):
+        dlg = settings.SettingsDialog() if _has_display() else None
+        if dlg is None:
+            self.skipTest('没有显示器，建不了设置窗口')
+        try:
+            self.assertNotIn('tray_backend', dlg.values())
+            self.assertFalse(hasattr(dlg, 'cmb_backend'))
+        finally:
+            dlg.destroy()
+
+
+def _has_display():
+    try:
+        from gi.repository import Gdk
+        return Gdk.Display.get_default() is not None
+    except Exception:
+        return False
+
+
 if __name__ == '__main__':
     unittest.main()
