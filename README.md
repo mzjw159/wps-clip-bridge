@@ -328,6 +328,26 @@ rm -rf ~/.cache/ukui ~/.cache/icon-cache.kcache     # 面板自己的图标缓�
 
 另外，托盘和任务栏里的旧图标会一直用到进程重启 —— 从托盘菜单「退出」再打开。
 
+### 发版流程
+
+1. **改版本号**：`src/wpsclip/core.py` 的 `VERSION`、`debian/control` 的
+   `Version`，再往 `debian/changelog` 顶部加一段（结尾那行
+   ` -- 名字 <邮箱>  日期` 不能省，`build.sh` 只认 `Version:`）。
+2. **打包**：`./build.sh --check` → 产出 `dist/wps-clip-bridge_<版本>_all.deb`；
+   重算校验和 `(cd dist && sha256sum wps-clip-bridge_<版本>_all.deb > SHA256SUMS)`。
+   安装包不进代码仓库历史以外的任何地方，`dist/` 只留最新那一个。
+3. **推代码**：`git commit` → `git tag v<版本>` → `git push origin master --tags`。
+   `origin` 是 SSH 地址（`git@github.com:mzjw159/wps-clip-bridge.git`），
+   靠 `~/.ssh/id_ed25519` 认证，不需要 token。
+4. **建 Release**：打开
+   <https://github.com/mzjw159/wps-clip-bridge/releases/new>，tag 选**已有**的
+   `v<版本>`（别在网页上新建 tag，否则会和本地那个分叉），标题用
+   `v<版本> · 一句话`，说明抄 `debian/changelog` 里那一段，附件传 `.deb` 和
+   `SHA256SUMS`，然后 Publish。
+
+第 4 步是独立的：`git push --tags` 只推 tag 这个引用，**Release 是 GitHub 上
+另一个对象**（带说明和附件），只能用网页或 GitHub API 建，`git push` 变不出来。
+
 ---
 
 ## 开发
