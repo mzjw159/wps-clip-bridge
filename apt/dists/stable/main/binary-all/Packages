@@ -26,9 +26,9 @@ Description: 让 WPS 文档能复制粘贴到桌面和微信
  云文档目录，所以 WPS 升级改了内部格式也不会静默变成空列表。
  排查问题跑 wps-copy --doctor。
 Filename: pool/main/w/wps-clip-bridge/wps-clip-bridge_1.8.0_all.deb
-Size: 166678
-MD5sum: 648bd4a480562b78e98072393d1fd362
-SHA256: 4ed5fdc73ee20e639f295d3853e948bf191b31760d926c744178b245f9d65656
+Size: 166668
+MD5sum: 11cdbf2d9748d0fe2b83cfdf27e70157
+SHA256: d193710e36906cf1d46de7b2f66a83cae407e046cf14f3967715cece1c334026
 
 Package: wps-clip-bridge
 Version: 1.7.3
