@@ -1,8 +1,8 @@
 #!/bin/sh
 # 检查打出来的 .deb 里该有的东西在不在、该统一的有没有统一。
 #
-#   ./tools/check-deb.sh                     检查 dist/ 下的包（必须恰好一个）
-#   ./tools/check-deb.sh path/to/x.deb       检查指定的包
+#   ./tools/check-deb.sh                     检查 debian/control 里那个版本的包
+#   ./tools/check-deb.sh path/to/x.deb       检查指定的包（一次一个）
 #
 # CI 每次构建都会跑一遍；本地改完 build.sh 或 data/ 下的东西也可以先跑它。
 # 检查项都是「漏了会真出问题」的：装完没有菜单项、名字还是旧的、图标没进包、
@@ -13,12 +13,26 @@
 set -e
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+# 传进来的通配符会先被 shell 展开：dist/ 里留着历史版本的 deb，一次给好几个时
+# 不能闷头拿第一个（那会把旧包的版本号跟 debian/control 比，报「不一致」）。
+if [ "$#" -gt 1 ]; then
+    echo "一次只能检查一个包，收到 $# 个：" >&2
+    printf '  %s\n' "$@" >&2
+    echo "dist/ 里留着历史版本，请给具体路径。" >&2
+    exit 2
+fi
 DEB="$1"
 if [ -z "$DEB" ]; then
-    # 通配成多个时不猜，直接报错，免得检查了错的那个
-    set -- "$HERE"/dist/wps-clip-bridge_*_all.deb
-    [ "$#" -eq 1 ] || { echo "dist/ 下有 $# 个 deb，请指定要检查哪个" >&2; exit 2; }
-    DEB="$1"
+    # 不给参数＝「检查刚打出来的那个」。dist/ 里存着历史版本，所以按
+    # debian/control 的版本号挑，而不是随便抓一个。
+    WANT=$(sed -n 's/^Version:[[:space:]]*//p' "$HERE/debian/control" | head -1)
+    DEB="$HERE/dist/wps-clip-bridge_${WANT}_all.deb"
+    if [ ! -f "$DEB" ]; then
+        echo "dist/ 下没有 ${WANT} 的包，现有：" >&2
+        ls -1 "$HERE"/dist/*.deb 2>/dev/null | sed 's/^/  /' >&2
+        echo "先 ./build.sh，或把要检查的包路径传进来。" >&2
+        exit 2
+    fi
 fi
 [ -f "$DEB" ] || { echo "找不到 $DEB" >&2; exit 2; }
 

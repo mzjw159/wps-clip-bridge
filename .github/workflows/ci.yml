@@ -62,18 +62,23 @@ jobs:
           GDK_BACKEND: x11
         run: python3 -m unittest discover -s tests -v
 
+      - name: 取版本号
+        # 后面要按这个路径精确找刚构建出来的包。dist/ 里还留着历史版本的 deb，
+        # 用 dist/*.deb 会让 check-deb 拿旧包去比版本号，然后报「不一致」。
+        run: echo "VER=$(dpkg-parsechangelog -S Version)" >> "$GITHUB_ENV"
+
       - name: 构建安装包
         run: ./build.sh --check
 
       - name: 检查包内容
-        run: ./tools/check-deb.sh dist/wps-clip-bridge_*_all.deb
+        run: ./tools/check-deb.sh "dist/wps-clip-bridge_${VER}_all.deb"
 
       - name: 上传安装包
         uses: actions/upload-artifact@v5
         with:
           name: deb-${{ matrix.os }}
           path: |
-            dist/wps-clip-bridge_*_all.deb
+            dist/wps-clip-bridge_${{ env.VER }}_all.deb
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14

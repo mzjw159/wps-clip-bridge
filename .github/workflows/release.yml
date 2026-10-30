@@ -69,7 +69,8 @@ jobs:
         run: ./build.sh
 
       - name: 检查包内容
-        run: ./tools/check-deb.sh
+        # 指定路径：dist/ 里还留着历史版本的 deb，不指定会撞上「一次只能检查一个包」
+        run: ./tools/check-deb.sh "dist/wps-clip-bridge_${TAG#v}_all.deb"
 
       - name: 生成发布说明与校验和
         run: |

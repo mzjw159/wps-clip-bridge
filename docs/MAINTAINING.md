@@ -13,9 +13,12 @@ OUT=/tmp/out ./build.sh # 换个输出目录
 构建完再看一眼包里的东西对不对：
 
 ```sh
-./tools/check-deb.sh                                  # 检查 dist/ 下那个包
+./tools/check-deb.sh                                  # 检查 control 里那个版本的包
 ./tools/check-deb.sh dist/wps-clip-bridge_1.7.2_all.deb
 ```
+
+不带参数时按 `debian/control` 的版本号去找对应的包 —— `dist/` 里留着历史版本，
+随便抓一个会把旧包的版本号跟 control 比，报「不一致」。一次只能检查一个包。
 
 它不装包、也不解包到磁盘，直接打开 `.deb` 读里面的文件做断言：菜单项的 `Name`、
 `Icon` 和实际图标文件对不对得上、`Exec` 指向的二进制在不在包里、控制脚本有没有
