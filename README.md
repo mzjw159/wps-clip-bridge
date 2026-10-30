@@ -330,6 +330,36 @@ rm -rf ~/.cache/ukui ~/.cache/icon-cache.kcache     # 面板自己的图标缓�
 
 ### 发版流程
 
+**一条命令（推荐）**：
+
+```sh
+# 1. 改版本号：core.py 的 VERSION、debian/control 的 Version、
+#    debian/changelog 顶部加一段（结尾 " -- 名字 <邮箱>  日期" 那行不能省）
+# 2. commit 之后：
+./tools/release.sh                        # 构建 + 校验和 + 说明 + 推 tag + 建 Release
+./tools/release.sh --title "v1.7.2 · 一句话"   # 自定义 Release 标题
+./tools/release.sh --draft                # 先建草稿，网页上确认后再 Publish
+./tools/release.sh --dry-run              # 只构建 + 生成说明，不推送不发版
+```
+
+脚本干的事，和下面手工那四步一一对应：核对 `control` 与 `changelog` 版本一致 →
+`./build.sh` → 重算 `dist/SHA256SUMS` → 从 `debian/changelog` 抽当前版本生成
+`dist/RELEASE-<版本>.md` → 打 tag 并推送 → `gh release create` 带上 `.deb` 与
+`SHA256SUMS`。Release 已存在时改成 `gh release edit` + `gh release upload --clobber`，
+所以同一条命令重跑是安全的。
+
+前置：`gh` 装好并登录过一次 ——
+
+```sh
+gh auth login        # 选 GitHub.com → 浏览器登录，粘一次设备码即可
+gh auth status       # 确认已登录
+```
+
+`gh` 是单个静态二进制（arm64 版解压即用，不依赖 glibc 版本），放在
+`~/.local/bin/gh` 即可，不需要 sudo 装包。
+
+**手工四步**（没有 gh、或想逐步确认时）：
+
 1. **改版本号**：`src/wpsclip/core.py` 的 `VERSION`、`debian/control` 的
    `Version`，再往 `debian/changelog` 顶部加一段（结尾那行
    ` -- 名字 <邮箱>  日期` 不能省，`build.sh` 只认 `Version:`）。
