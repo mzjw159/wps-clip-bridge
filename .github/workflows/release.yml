@@ -89,9 +89,12 @@ jobs:
           DEB="dist/wps-clip-bridge_${VER}_all.deb"
           NOTES="dist/RELEASE-$VER.md"
 
-          # 标题取 changelog 首条的第一个分句，读起来比光秃秃的 tag 有用
-          FIRST=$(grep -m1 '^  \* ' debian/changelog | sed 's/^  \* //; s/。.*//')
-          TITLE="$TAG · $FIRST"
+          # 标题取 changelog 首条的第一个短句，读起来比光秃秃的 tag 有用。
+          # 必须截断：changelog 的条目是给人读的整段话，原样当标题会撑成一长条。
+          FIRST=$(grep -m1 '^  \* ' debian/changelog | sed 's/^  \* //')
+          # 单行 python：多行 -c 在 YAML 块里会带上缩进，Python 直接报 IndentationError
+          SHORT=$(printf '%s' "$FIRST" | python3 -c "import re,sys;print(re.split(r'[，。：；]',sys.stdin.read().strip())[0][:30])")
+          TITLE="$TAG · $SHORT"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG 已存在，更新说明与附件"
