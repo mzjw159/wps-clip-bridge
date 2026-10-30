@@ -493,12 +493,21 @@ class App(object):
         Gtk.main_quit()
 
     def show_window(self, *_):
+        # 先把窗口「显示」再「提到前面」：deiconify 只对已映射的窗口有效，
+        # 而「启动即隐藏」时窗口连 X 窗口都还没创建，只 deiconify 是叫不出来的。
         try:
+            self.win.show()
             self.win.deiconify()
             self.win.show_all()
             self.win.present()
-        except Exception:
-            pass
+            # 有的窗管不认 present()，再抢一次焦点，失败也无所谓
+            try:
+                self.win.grab_focus()
+            except Exception:
+                pass
+        except Exception as ex:
+            # 这里以前是 pass —— 托盘点了没反应也无从查起
+            core.log('显示窗口失败: %r' % (ex,))
         self.reload()
 
     def open_settings(self, *_):

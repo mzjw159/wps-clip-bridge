@@ -2,9 +2,16 @@
 # -*- coding: utf-8 -*-
 """系统托盘图标。
 
-两条后端，优先用 StatusNotifier（AppIndicator），因为它在新面板上更稳；
-面板不支持 SNI 时 libappindicator 自己会退回 XEmbed，还不行就用 GTK 的
-`Gtk.StatusIcon`。都失败也不致命——上层据此避免「关窗后无处可点」。
+三条后端，按可靠性排序：
+
+1. ``sni`` —— 自己实现的 StatusNotifierItem（见 sni.py）。单击/双击/中键
+   都直接「显示窗口」，图标用 IconPixmap 直接给像素，不依赖图标主题缓存。
+2. ``indicator`` —— libappindicator。以前的主力，现在只当兜底：它不允许
+   左键激活窗口（只会弹菜单），也只把绝对路径当图标名传给面板，面板按
+   图标主题一查就落空、显示成系统齿轮图标。
+3. ``statusicon`` —— GTK 老式 XEmbed 图标，只有不支持 SNI 的老面板才用得上。
+
+都失败也不致命——上层据此避免「关窗后无处可点」。
 """
 import os
 
@@ -17,6 +24,12 @@ from . import core  # noqa: E402
 
 _ID = 'wps-clip-bridge'
 
+# 顺序即优先级；'auto' 与其写错时的兜底都走这一串
+_BACKENDS = ('sni', 'indicator', 'statusicon')
+_STARTERS = {'sni': '_start_sni',
+             'indicator': '_start_indicator',
+             'statusicon': '_start_status_icon'}
+
 
 def _icon_pixbuf(size=48):
     from . import gui
@@ -25,7 +38,7 @@ def _icon_pixbuf(size=48):
 
 
 def _icon_arg():
-    """AppIndicator 优先吃绝对路径，源码树里也能显示。"""
+    """AppIndicator 吃绝对路径，源码树里也能显示（它没有 IconPixmap 可用）。"""
     from . import gui
     for p in gui._icon_files():
         if p.endswith('.png') and os.path.exists(p):
@@ -40,6 +53,7 @@ class Tray(object):
         self.on_settings = on_settings
         self.on_quit = on_quit
         self.backend = None
+        self._sni = None
         self._indicator = None
         self._ai = None
         self._status_icon = None
@@ -47,24 +61,28 @@ class Tray(object):
         self._show_item = None
 
     # ------------------------------------------------------------ 构建
-    def _build_menu(self):
-        menu = Gtk.Menu()
-        for label, cb in (
+    def _menu_spec(self):
+        """菜单内容：Gtk 菜单和 dbusmenu 共用一份定义，改文案只改这里。"""
+        return [
             ('显示窗口', self.on_show),
             ('复制最近文档', self.on_copy),
-            (None, None),
+            None,
             ('设置…', self.on_settings),
-            (None, None),
+            None,
             ('退出', self.on_quit),
-        ):
-            if label is None:
+        ]
+
+    def _build_menu(self):
+        menu = Gtk.Menu()
+        for entry in self._menu_spec():
+            if entry is None:
                 menu.append(Gtk.SeparatorMenuItem())
                 continue
+            label, cb = entry
             mi = Gtk.MenuItem(label=label)
             mi.connect('activate', lambda _w, cb=cb: cb())
             if label == '显示窗口':
-                # 记下来给 AppIndicator 当「次级激活」目标：中键点图标、
-                # 以及不少面板把双击当次级激活，都会走到这里。
+                # 给 AppIndicator 当「次级激活」目标：中键点图标会走到这里
                 self._show_item = mi
             menu.append(mi)
         menu.show_all()
@@ -73,21 +91,55 @@ class Tray(object):
 
     def start(self):
         want = core.conf('ui', 'tray_backend', 'auto').strip().lower()
-        if want in ('auto', 'indicator'):
-            if self._start_indicator():
-                return True
-        if want in ('auto', 'statusicon'):
-            if self._start_status_icon():
-                return True
+        if want in ('sni', 'indicator', 'statusicon'):
+            order = (want,) + tuple(b for b in _BACKENDS if b != want)
+        else:
+            order = _BACKENDS
+        for name in order:
+            starter = getattr(self, _STARTERS.get(name, '_start_' + name), None)
+            if starter is None:
+                continue
+            try:
+                if starter():
+                    return True
+            except Exception as ex:
+                core.log('托盘后端 %s 启动异常: %r' % (name, ex))
         core.log('托盘初始化失败：面板可能不支持 StatusNotifier / XEmbed')
         return False
 
-    def _start_indicator(self):
+    # ------------------------------------------------------------ 后端 1
+    def _start_sni(self):
         try:
-            gi.require_version('AppIndicator3', '0.1')
-            from gi.repository import AppIndicator3 as AppIndicator
-        except Exception:
+            from .sni import SniItem
+        except Exception as ex:
+            core.log('SNI 模块不可用: %r' % (ex,))
             return False
+        item = SniItem(self._menu_spec(), on_activate=self.on_show,
+                       on_secondary=self.on_show)
+        if not item.start():
+            return False
+        self._sni = item
+        self.backend = 'sni'
+        core.log('托盘使用原生 StatusNotifierItem（单击图标即显示窗口）')
+        return True
+
+    # ------------------------------------------------------------ 后端 2
+    def _start_indicator(self):
+        repo = __import__('gi.repository', fromlist=['repository'])
+        for name in ('AyatanaAppIndicator3', 'AppIndicator3'):
+            try:
+                gi.require_version(name, '0.1')
+            except Exception:
+                continue
+            try:
+                AppIndicator = getattr(repo, name)
+            except Exception:
+                continue
+            if self._new_indicator(AppIndicator, name):
+                return True
+        return False
+
+    def _new_indicator(self, AppIndicator, name):
         try:
             ind = AppIndicator.Indicator.new(
                 _ID, _icon_arg(), AppIndicator.IndicatorCategory.APPLICATION_STATUS)
@@ -96,13 +148,10 @@ class Tray(object):
             menu = self._build_menu()
             ind.set_menu(menu)
 
-            # 「双击 / 中键点图标 -> 显示窗口」
-            #
             # StatusNotifier 协议里没有「双击」这个语义：面板对左键的处理就是
             # 弹菜单（这是面板决定的，程序改不了）。协议里唯一能表达「点一下
-            # 图标但不要菜单」的是 secondary activate，靠它把动作指向「显示
-            # 窗口」这一项 —— 中键一定生效，很多面板（含 UKUI）也把双击转发
-            # 给它。真要做到「单击即显示」，只能用 Gtk.StatusIcon 后端。
+            # 图标但不要菜单」的是 secondary activate —— 中键一定生效，部分
+            # 面板也把双击转发给它。
             item = getattr(self, '_show_item', None)
             if item is not None and hasattr(ind, 'set_secondary_activate_target'):
                 try:
@@ -113,12 +162,13 @@ class Tray(object):
             self._indicator = ind
             self._ai = AppIndicator
             self.backend = 'indicator'
-            core.log('托盘使用 AppIndicator3')
+            core.log('托盘使用 %s' % name)
             return True
         except Exception as ex:
             core.log('AppIndicator 初始化失败: %r' % (ex,))
             return False
 
+    # ------------------------------------------------------------ 后端 3
     def _start_status_icon(self):
         if not hasattr(Gtk, 'StatusIcon'):
             return False
@@ -129,7 +179,7 @@ class Tray(object):
                 icon.set_from_pixbuf(pb)
             else:
                 icon.set_from_file(_icon_arg())
-            icon.set_tooltip_text('WPS 最近文档复制')
+            icon.set_tooltip_text('WPS 最近文档复制（单击显示窗口）')
             icon.connect('activate', lambda *a: self.on_show())
             icon.connect('popup-menu', self._on_popup)
             icon.set_visible(True)
@@ -152,6 +202,12 @@ class Tray(object):
         return self.backend is not None
 
     def stop(self):
+        try:
+            if self._sni is not None:
+                self._sni.stop()
+        except Exception:
+            pass
+        self._sni = None
         try:
             if self._indicator is not None and self._ai is not None:
                 self._indicator.set_status(self._ai.IndicatorStatus.PASSIVE)

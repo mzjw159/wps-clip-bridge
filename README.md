@@ -35,12 +35,12 @@ CLIPBOARD 持有者：Qt Selection Owner for wpsoffice
 `wps-clip-bridge_x.y.z_all.deb`（同时提供 `SHA256SUMS` 校验），然后三种方式任选：
 
 ```sh
-sudo apt install ./dist/wps-clip-bridge_1.5.0_all.deb   # 命令行
+sudo apt install ./dist/wps-clip-bridge_1.6.0_all.deb   # 命令行
 ```
 
 - **双击** .deb 文件，用系统的安装器（麒麟上是「安装器 / kylin-installer」）；
-- 或者命令行 `sudo apt install ./wps-clip-bridge_1.4.1_all.deb`；
-- 或者离线时 `sudo dpkg -i wps-clip-bridge_1.4.1_all.deb`。
+- 或者命令行 `sudo apt install ./wps-clip-bridge_*_all.deb`；
+- 或者离线时 `sudo dpkg -i wps-clip-bridge_*_all.deb`。
 
 从 1.4.1 起这三种方式**都不需要额外装任何东西**：`python-xlib` 已经打包在
 程序内部（系统里装了 `python3-xlib` 时优先用系统的），剩下的依赖
@@ -201,16 +201,16 @@ wps-copy --doctor
 | 窗口与托盘 | 复制后自动收起 | 复制成功就把窗口收起来，不打断你粘贴 |
 | 窗口与托盘 | 启动时待在托盘 | 开机/启动时不弹窗，只在托盘待命 |
 | 窗口与托盘 | 复制成功发通知 | 走 `notify-send`；窗口收起时、以及用快捷键复制时，这是唯一的结果反馈 |
-| 窗口与托盘 | 托盘图标样式 | 自动 / 跟随面板 / 经典图标。经典图标可以「点一下即显示窗口」 |
+| 窗口与托盘 | 托盘图标样式 | 自动（推荐）/ 兼容模式 / 经典图标，一般不用动 |
 | 启动 | 开机自动启动 | 写 `~/.config/autostart/` 的屏蔽项，不动 `/etc` 下的系统文件 |
 
-托盘图标：**双击或中键点它唤回窗口**；菜单里还有「显示窗口」「复制最近文档」
-「设置…」「退出」。
+托盘图标：**单击（或双击、中键）它就把窗口叫出来**，右键是菜单：「显示窗口」
+「复制最近文档」「设置…」「退出」。
 
-双击这件事受面板限制：StatusNotifier 协议里，面板对左键的处理固定是弹菜单，
-程序改不了。程序能做的是把「次级激活」（中键、以及不少面板转发给它的双击）
-指向「显示窗口」。想要严格意义上的「单击即显示窗口」，把上面的「托盘图标样式」
-改成「经典图标」——它走老的 XEmbed 托盘，点击语义由程序自己决定。
+托盘图标是程序自己按 StatusNotifierItem 规范挂上去的，不是用 libappindicator：
+那一层把左键固定成弹菜单，点半天窗口不出来；而且它只把图标路径当图标名交给
+面板，面板按图标主题一查就落空，于是显示成系统默认的齿轮图标。自己实现之后，
+左键直接是「显示窗口」，图标同时给主题名和 `IconPixmap` 像素，谁都不挑。
 
 如果桌面环境既不支持 StatusNotifier 也不支持 XEmbed 托盘，程序会自动退化为
 「关闭即退出」，避免窗口消失后无处唤回。
@@ -408,6 +408,9 @@ wps-clip-bridge/
 │   ├── service.py           服务编排：确保在跑、异步复制、确认结果
 │   ├── cli.py               命令行 wps-copy
 │   ├── gui.py               图形窗口 wps-copy-gui
+│   ├── settings.py          设置窗口
+│   ├── tray.py              托盘图标（三条后端，按可靠性回退）
+│   ├── sni.py               自己实现的 StatusNotifierItem
 │   ├── hotkey.py            全局热键 wps-copy-hotkey
 │   └── daemon.py            看护进程 wps-clip-bridge-daemon
 ├── bin/                     5 个可执行入口（薄壳，转手给上面的模块）
@@ -415,7 +418,7 @@ wps-clip-bridge/
 ├── tools/                   辅助脚本（render-icons.py：从 SVG 出各尺寸 PNG）
 ├── tests/                   单元测试（不需要图形环境）
 ├── debian/                  control、维护脚本、copyright、changelog
-├── dist/                    打包产物（已放 1.3.0）
+├── dist/                    打包产物（含最新 deb 与 SHA256SUMS）
 ├── build/                   构建中间目录，每次构建重建，可随时删
 ├── build.sh
 └── .gitignore

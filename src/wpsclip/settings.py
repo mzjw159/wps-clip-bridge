@@ -120,6 +120,40 @@ def apply_theme(mode=None):
     return dark
 
 
+def is_dark_now():
+    """当前界面看起来是深色吗（用于手写颜色的对比度选择）。"""
+    mode = core.conf('ui', 'theme', 'system').strip().lower()
+    if mode == 'dark':
+        return True
+    if mode == 'light':
+        return False
+    return system_dark()
+
+
+# 手写颜色的对比度：浅色主题上用深蓝，深色主题上用浅蓝。
+# 让主题自己决定链接色不靠谱 —— 麒麟的 ukui-white 里链接色偏浅，
+# 白底上几乎看不清。
+LINK_COLORS = {True: '#7fb2ff', False: '#125a9e'}
+
+
+def link_color():
+    return LINK_COLORS[is_dark_now()]
+
+
+def content_max_height():
+    """设置窗口内容区的高度上限：跟着屏幕走。
+
+    768 高的老笔记本上原来整窗 740 多，底部按钮直接被挤到屏幕外；
+    这里按屏高的 62% 封顶，超出的部分滚动，动作按钮永远留在可见区域。
+    """
+    try:
+        screen = Gdk.Screen.get_default()
+        h = screen.get_height() if screen is not None else 1080
+    except Exception:
+        h = 1080
+    return max(320, min(560, int(h * 0.62)))
+
+
 # ------------------------------------------------------------------ 快捷键录入
 
 def pretty_combo(combo):
@@ -226,16 +260,35 @@ class HotkeyButton(Gtk.Button):
 class SettingsDialog(Gtk.Dialog):
     def __init__(self, parent=None):
         Gtk.Dialog.__init__(self, title='设置', parent=parent, modal=True)
-        self.set_default_size(560, -1)
+        self.set_default_size(580, -1)
         self.set_border_width(0)
         self.add_button('恢复默认', Gtk.ResponseType.APPLY)
         self.add_button('取消', Gtk.ResponseType.CANCEL)
         save = self.add_button('保存', Gtk.ResponseType.OK)
         save.get_style_context().add_class('suggested-action')
 
-        box = self.get_content_area()
-        box.set_spacing(14)
+        # 内容区可滚动、动作按钮固定底部：小屏笔记本（768 高的机器很常见）
+        # 上原来的窗口比屏幕还高，底部按钮被挤到屏幕外，只能盲按回车。
+        outer = self.get_content_area()
+        outer.set_spacing(0)
+        outer.set_border_width(0)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_shadow_type(Gtk.ShadowType.NONE)
+        # 内容装得下时窗口跟着内容长高；超过上限才出现滚动条
+        for setter, value in (('set_propagate_natural_height', True),
+                              ('set_max_content_height', content_max_height()),
+                              ('set_min_content_height', 120)):
+            try:
+                getattr(scroll, setter)(value)
+            except Exception:
+                pass
+        outer.pack_start(scroll, True, True, 0)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         box.set_border_width(18)
+        scroll.add(box)
 
         # ---- 快捷键
         box.pack_start(self._section('全局快捷键'), False, False, 0)
@@ -312,14 +365,14 @@ class SettingsDialog(Gtk.Dialog):
         self.chk_notify.set_active(core.conf_bool('ui', 'notify_on_copy', True))
         vbox.pack_start(self.chk_notify, False, False, 0)
 
-        # 托盘图标样式：StatusNotifier 协议里，面板对左键的处理一律是弹菜单
-        # （程序没法改），«点一下图标就显示窗口» 只有经典图标能做到。留个开关。
+        # 托盘图标样式：程序自己实现了 StatusNotifierItem，左键点图标即显示
+        # 窗口；libappindicator 做不到这件事（左键只能是弹菜单），留作兜底。
         row_backend = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         row_backend.pack_start(self._label('托盘图标样式'), False, False, 0)
         self.cmb_backend = Gtk.ComboBoxText()
-        for key, text in (('auto', '自动（推荐）'),
-                          ('indicator', '跟随面板（左键弹菜单）'),
-                          ('statusicon', '经典图标（点一下即显示窗口）')):
+        for key, text in (('auto', '自动（推荐：单击图标即显示窗口）'),
+                          ('indicator', '兼容模式（左键弹菜单）'),
+                          ('statusicon', '经典图标（仅老面板）')):
             self.cmb_backend.append(key, text)
         cur_backend = core.conf('ui', 'tray_backend', 'auto').strip().lower()
         self.cmb_backend.set_active_id(
@@ -351,11 +404,10 @@ class SettingsDialog(Gtk.Dialog):
         ver.get_style_context().add_class('dim-label')
         about.pack_start(ver, False, False, 0)
 
-        # 真链接而不是纯文字：Gtk.LinkButton 点一下就用默认浏览器打开
-        site = Gtk.LinkButton.new_with_label(SITE_URL, '官网  ' + SITE_TEXT)
-        site.set_halign(Gtk.Align.START)
-        site.set_tooltip_text(SITE_URL)
-        about.pack_start(site, False, False, 0)
+        # 官网链接自己画颜色：主题给的链接色在 ukui-white 上偏浅，白底上
+        # 几乎看不见。Gtk.LinkButton 的标签颜色由主题 CSS 决定、改不动，
+        # 所以这里用「标签 + 点击事件」，颜色按当前明暗手写（link_color()）。
+        about.pack_start(self._site_link(), False, False, 0)
 
         tip = Gtk.Label(label='把 WPS 里的最近文档变成能直接粘贴的文件，'
                               '省掉翻文件夹那一步。\n用着不顺手、想要什么功能，'
@@ -367,13 +419,64 @@ class SettingsDialog(Gtk.Dialog):
         about.pack_start(tip, False, False, 0)
         box.pack_start(about, False, False, 0)
 
+        # 校验错误放在滚动区外面：滚到底才看得见提示等于没提示
         self.error = Gtk.Label()
         self.error.set_xalign(0)
         self.error.set_line_wrap(True)
+        self.error.set_margin_start(18)
+        self.error.set_margin_end(18)
+        self.error.set_margin_bottom(10)
         self.error.get_style_context().add_class('error')
-        box.pack_start(self.error, False, False, 0)
+        self.error.set_no_show_all(True)
+        outer.pack_start(self.error, False, False, 0)
 
         self.show_all()
+        self.error.hide()
+
+    @staticmethod
+    def _site_link():
+        """「官网 www.gwbbm.cn」——可点、有下划线、对比度足够。"""
+        box = Gtk.EventBox()
+        box.set_visible_window(False)
+        lab = Gtk.Label()
+        lab.set_markup('<span color="%s" underline="single">官网  %s</span>'
+                       % (link_color(), SITE_TEXT))
+        lab.set_xalign(0)
+        box.add(lab)
+        box.set_tooltip_text('%s（点击用浏览器打开）' % SITE_URL)
+        box.set_halign(Gtk.Align.START)
+        box.set_events(Gdk.EventMask.BUTTON_RELEASE_MASK)
+        try:
+            box.connect('realize', lambda w: w.get_window().set_cursor(
+                Gdk.Cursor.new_from_name(Gdk.Display.get_default(), 'pointer')))
+        except Exception:
+            pass
+        box.connect('button-release-event',
+                    lambda w, e: SettingsDialog._open_site(w))
+        return box
+
+    @staticmethod
+    def _open_site(widget=None):
+        top = widget.get_toplevel() if widget is not None else None
+        if not isinstance(top, Gtk.Window):
+            top = None
+        try:
+            Gtk.show_uri_on_window(top, SITE_URL, Gtk.get_current_event_time())
+        except Exception:
+            try:
+                Gtk.show_uri(None, SITE_URL, Gtk.get_current_event_time())
+            except Exception as ex:
+                core.log('打开官网失败: %r' % (ex,))
+        return True
+
+    def set_error(self, text):
+        """显示/收起底部的校验提示（空字符串即收起）。"""
+        self.error.set_text(text or '')
+        if text:
+            self.error.show()
+        else:
+            self.error.hide()
+        return False
 
     @staticmethod
     def _label(text):
@@ -479,18 +582,18 @@ def open_settings(parent=None):
         resp = dlg.run()
         if resp == Gtk.ResponseType.APPLY:
             dlg.restore_defaults()
-            dlg.error.set_text('')
+            dlg.set_error('')
             continue
         if resp == Gtk.ResponseType.OK:
             v = dlg.values()
             err = dlg.validate(v)
             if err:
-                dlg.error.set_text(err)
+                dlg.set_error(err)
                 continue
             try:
                 dlg.apply(v)
             except Exception as ex:
-                dlg.error.set_text('保存失败：%s' % ex)
+                dlg.set_error('保存失败：%s' % ex)
                 continue
             saved = True
         break
