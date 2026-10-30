@@ -10,26 +10,65 @@ OUT=/tmp/out ./build.sh # 换个输出目录
 
 只依赖 `dpkg-deb` 和 `gzip`，不需要 `debhelper` / `fakeroot`（用 `--root-owner-group`）。
 
-## 发版
-
-**一条命令**：
+构建完再看一眼包里的东西对不对：
 
 ```sh
-# 1. 改版本号：src/wpsclip/core.py 的 VERSION、debian/control 的 Version、
+./tools/check-deb.sh                                  # 检查 dist/ 下那个包
+./tools/check-deb.sh dist/wps-clip-bridge_1.7.2_all.deb
+```
+
+它不装包、也不解包到磁盘，直接打开 `.deb` 读里面的文件做断言：菜单项的 `Name`、
+`Icon` 和实际图标文件对不对得上、`Exec` 指向的二进制在不在包里、控制脚本有没有
+执行位、还有没有旧名字残留。这些漏了在本地看不出问题，装到别人机器上才暴露。
+CI 每次构建都会跑这一关。
+
+## 发版
+
+**推荐走 CI：推一个 tag 就发完**，不依赖谁的本机环境装了什么。CI 跑在
+x86_64 上没关系 —— 包是 `Architecture: all`，纯 Python + 数据文件，和架构无关。
+
+```sh
+# 1. 改三处版本号（三者必须一致，workflow 会核对）
+#    src/wpsclip/core.py 的 VERSION
+#    debian/control 的 Version
 #    debian/changelog 顶部加一段（结尾 " -- 名字 <邮箱>  日期" 那行不能省）
-# 2. commit 之后：
+
+git commit -am "release: 1.7.3"
+git tag v1.7.3
+git push origin master --tags
+```
+
+tag 推上去后 `.github/workflows/release.yml` 依次做：
+
+1. 核对 tag、`control`、`changelog` 三处版本一致 —— 不一致直接失败，不会发出
+   文件名和标题对不上的包；
+2. 跑一遍全部单元测试（tag 可能打在没走过 CI 的提交上，这是最后一道闸）；
+3. `./build.sh` → `./tools/check-deb.sh`；
+4. 用 `tools/changelog-notes.py` 从 changelog 生成发布说明，算 `SHA256SUMS`；
+5. `gh release create`，带上 `.deb`、`SHA256SUMS` 和说明。
+
+Release 已存在时走「更新说明 + 覆盖附件」，所以同一个 tag 重推、或手动
+`workflow_dispatch` 重跑都不会报错。
+
+> **一次性设置**：仓库的 Settings → Actions → General → Workflow permissions
+> 要允许 *Read and write permissions*，否则第 5 步会报
+> `Resource not accessible by integration`。workflow 里已经声明了
+> `permissions: contents: write`，但仓库级开关关着也照样没权限。
+
+**本地一键发版**（CI 用不了、或者想先看看构建结果再决定）：
+
+```sh
+./tools/release.sh --dry-run                   # 只构建 + 生成说明，不推送不发版
 ./tools/release.sh                             # 构建 + 校验和 + 说明 + 推 tag + 建 Release
 ./tools/release.sh --title "v1.7.2 · 一句话"    # 自定义 Release 标题
 ./tools/release.sh --draft                     # 先建草稿，网页上确认后再 Publish
-./tools/release.sh --dry-run                   # 只构建 + 生成说明，不推送不发版
 ```
 
-脚本依次做：核对 `control` 与 `changelog` 版本一致 → `./build.sh` → 重算
-`dist/SHA256SUMS` → 从 `debian/changelog` 抽当前版本生成 `dist/RELEASE-<版本>.md`
-→ 打 tag 并推送 → `gh release create` 带上 `.deb` 与 `SHA256SUMS`。
+它做的事和 CI 那套一样，说明生成用的是同一个脚本（`tools/changelog-notes.py`），
+所以两条路发出来的说明不会长得不一样。Release 已存在时改走
+`gh release edit` + `gh release upload --clobber`，重跑安全。
 
-Release 已存在时改成 `gh release edit` + `gh release upload --clobber`，所以同一条
-命令重跑是安全的。
+两条路可以混用：本地发过之后 CI 再跑同一个 tag，附件会被覆盖成 CI 构建的那份。
 
 前置：`gh` 装好并登录过一次。
 
@@ -51,15 +90,15 @@ install -m 755 gh_2.103.3_linux_arm64/bin/gh ~/.local/bin/gh
 `gh auth login` 若卡在 `Bad Gateway`，是代理的问题不是授权失败 —— 换一个能通
 `github.com` 的代理重试即可（`api.github.com` 通不代表登录能成）。
 
-**手工四步**（没有 gh、或想逐步确认时）：
+**完全手工**（没 gh、没网络、CI 坏掉时）：
 
 1. 改版本号（同上）。
 2. `./build.sh --check` → 产出 `dist/wps-clip-bridge_<版本>_all.deb`；
    `(cd dist && sha256sum wps-clip-bridge_<版本>_all.deb > SHA256SUMS)`。
 3. `git commit` → `git tag v<版本>` → `git push origin master --tags`。
 4. 打开 <https://github.com/mzjw159/wps-clip-bridge/releases/new>，tag 选**已有**的
-   `v<版本>`（别在网页上新建 tag，否则会和本地那个分叉），说明抄 `debian/changelog`
-   里那一段，附件传 `.deb` 和 `SHA256SUMS`，然后 Publish。
+   `v<版本>`（别在网页上新建 tag，否则会和本地那个分叉），说明粘
+   `tools/changelog-notes.py <版本>` 的输出，附件传 `.deb` 和 `SHA256SUMS`，然后 Publish。
 
 第 4 步是独立的：`git push --tags` 只推 tag 这个引用，**Release 是 GitHub 上另一个
 对象**（带说明和附件），只能用网页或 GitHub API 建，`git push` 变不出来。

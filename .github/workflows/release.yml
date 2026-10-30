@@ -1,0 +1,100 @@
+name: Release
+
+# 推一个 v 开头的 tag 就发版：构建 → 检查 → 生成说明 → 建 GitHub Release。
+# 这样「发版」这件事不依赖某台机器上装了什么，也不依赖我的终端是不是开着。
+on:
+  push:
+    tags: ['v*']
+  # 允许手动重跑（比如发布时网络抖动失败了），用当前分支的 HEAD 对应的 tag 再发一次
+  workflow_dispatch:
+
+permissions:
+  # 建 Release、传附件、改说明都要写权限。默认的 contents: read 不够，
+  # 少了这一行会报 "Resource not accessible by integration"
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发版
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 生成说明要从 changelog 读历史，完整历史更稳妥
+          fetch-depth: 0
+
+      - name: 核对 tag 与版本号
+        # 最常见的发版事故：tag 写了 v1.7.3，debian/control 还是 1.7.2，
+        # 发出去的包文件名、Release 标题、changelog 全对不上。
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(sed -n 's/^Version:[[:space:]]*//p' debian/control | head -1)
+          TOP=$(sed -n '1s/.*(\([^)]*\)).*/\1/p' debian/changelog)
+          echo "tag=$TAG control=$VER changelog=$TOP"
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 debian/control 的版本 $VER 不一致"
+            exit 1
+          fi
+          if [ "$TOP" != "$VER" ]; then
+            echo "::error::debian/changelog 顶部是 $TOP，与 $VER 不一致（发布说明会缺这一段）"
+            exit 1
+          fi
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi gir1.2-gtk-3.0 python3-xlib \
+            desktop-file-utils dpkg-dev
+
+      - name: 单元测试
+        # 发版前跑一遍：tag 可能打在没走 CI 的提交上，这一关就是最后一道闸
+        env:
+          GDK_BACKEND: x11
+        run: python3 -m unittest discover -s tests -v
+
+      - name: 构建
+        run: ./build.sh
+
+      - name: 检查包内容
+        run: ./tools/check-deb.sh
+
+      - name: 生成发布说明与校验和
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          tools/changelog-notes.py "$VER" -o "dist/RELEASE-$VER.md" \
+            --deb "wps-clip-bridge_${VER}_all.deb"
+          (cd dist && sha256sum "wps-clip-bridge_${VER}_all.deb" > SHA256SUMS)
+          cat "dist/RELEASE-$VER.md"
+          echo "---"
+          cat dist/SHA256SUMS
+
+      - name: 创建或更新 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          TAG="$GITHUB_REF_NAME"
+          DEB="dist/wps-clip-bridge_${VER}_all.deb"
+          NOTES="dist/RELEASE-$VER.md"
+
+          # 标题取 changelog 首条的第一个分句，读起来比光秃秃的 tag 有用
+          FIRST=$(grep -m1 '^  \* ' debian/changelog | sed 's/^  \* //; s/。.*//')
+          TITLE="$TAG · $FIRST"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，更新说明与附件"
+            gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES"
+            gh release upload "$TAG" "$DEB" dist/SHA256SUMS --clobber
+          else
+            echo "创建 Release $TAG"
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --notes-file "$NOTES" \
+              --verify-tag \
+              "$DEB" dist/SHA256SUMS
+          fi
+
+          gh release view "$TAG" --json url,assets \
+            -q '"发布完成：" + .url, (.assets[] | "  附件: " + .name + "  " + (.size|tostring) + " 字节")'

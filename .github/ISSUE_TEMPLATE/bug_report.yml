@@ -1,0 +1,127 @@
+name: 缺陷报告
+description: 装了打不开、托盘没反应、复制出来是空的、列表不对……
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        大多数问题在自检输出里一眼就能看出来，**请务必先跑一遍**：
+
+        ```bash
+        wps-copy --doctor
+        ```
+
+        它会把系统、会话类型（X11 / Wayland）、依赖、WPS 配置文件位置、
+        三层解析各命中多少条，全打出来。没有这段输出的报告基本没法查，
+        因为最常见的原因就藏在这几行里。
+
+  - type: checkboxes
+    id: precheck
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我搜过已有 Issue，没有重复的
+          required: true
+        - label: 我用的是 [Releases](https://github.com/mzjw159/wps-clip-bridge/releases) 里的最新版
+          required: true
+        - label: 我读过 [排障文档](https://github.com/mzjw159/wps-clip-bridge/blob/master/docs/TROUBLESHOOTING.md)
+          required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: 自检输出
+      description: 把 `wps-copy --doctor` 的完整输出粘进来（终端里选中、复制即可，不用截图）
+      render: text
+      placeholder: |
+        $ wps-copy --doctor
+        WPS 最近文档 1.7.2 自检
+        系统：Linux aarch64 / Python 3.8.10
+        会话：XDG_SESSION_TYPE=x11  DISPLAY=:0
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 实际发生了什么。有报错信息就原样贴，别改写成「它报错了」
+      placeholder: 点托盘图标，窗口闪一下就没了，日志里出现 Traceback...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 越具体越好，最好能写清第几步开始不对
+      placeholder: |
+        1. 在 WPS 里打开并保存一个 .docx
+        2. 按 Ctrl+Alt+C 唤起窗口
+        3. 双击列表第一行
+        4. 到桌面按 Ctrl+V —— 什么都没粘出来
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望的结果
+      placeholder: 应该粘出一个 .docx 文件（显示为文件图标，不是文本）
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: "`wps-copy --version` 的输出，或 `dpkg -l wps-clip-bridge` 那一行"
+      placeholder: WPS 最近文档 1.7.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: session
+    attributes:
+      label: 会话类型
+      description: "`echo $XDG_SESSION_TYPE` 的结果；不确定就选「不确定」"
+      options:
+        - x11
+        - wayland
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: 发行版与桌面环境
+      placeholder: 麒麟桌面版 V10 SP1 / UKUI；Ubuntu 24.04 / GNOME 46；Deepin 23 / DDE
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: 日志（可选，但很管用）
+      description: |
+        `wps-copy --status` 会打印日志目录（通常是 `~/.local/state/wps-clip-bridge/`），
+        把那里面最新日志的末尾几十行贴上来。
+
+        ⚠️ 贴之前请把文档路径、单位/项目名换成 `~/Documents/示例.docx` 这类占位符。
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 出现频率
+      options:
+        - 每次都会
+        - 偶尔（十次里几次）
+        - 只出现过一次，之后没再复现
+    validations:
+      required: true

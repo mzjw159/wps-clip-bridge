@@ -1,0 +1,62 @@
+name: 功能建议
+description: 想要新功能，或者觉得某处交互该改
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个工具的定位很小：**把 WPS 最近文档里的文件放进剪贴板**。
+        围绕着它做的东西都欢迎提，但请先说清「你现在怎么应付」——
+        有个能凑合的笨办法，往往比一句「希望支持 XX」更能说明痛点有多真。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你现在遇到的不便
+      description: 先讲场景，不要直接讲方案
+      placeholder: |
+        我一天要在同一个合同上改七八次，每次都得：点托盘 → 在列表里找到它 →
+        双击。列表里文件一多就得往下翻，很烦。
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你希望它怎么工作
+      description: 具体到操作步骤最好；如果只是「顺一点」也可以写
+      placeholder: 希望能把某些文件钉在列表顶部，托盘菜单里也直接列出前 5 个。
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 现在的替代做法
+      description: 现在的笨办法是什么？如果其实没有，写「没有」也很有信息量
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 你觉得这属于哪一类
+      options:
+        - 交互体验（窗口、托盘、热键）
+        - 数据来源（支持更多办公软件 / 更多 WPS 版本）
+        - 剪贴板兼容（Wayland、某些应用粘不出来）
+        - 安装与打包
+        - 其他
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: precheck
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我搜过已有 Issue，没有重复的建议
+          required: true
+        - label: 我读过 README 的功能清单，确认现在确实没有这个功能
+          required: true

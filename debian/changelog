@@ -1,3 +1,28 @@
+wps-clip-bridge (1.7.3) unstable; urgency=medium
+
+  * 加 GitHub Actions。之前 193 个用例只在本机跑过，PR 来了没法验证、
+    改坏了也没人拦。
+    - .github/workflows/ci.yml：在 Ubuntu 22.04（Python 3.10）和 24.04
+      （3.12）上各跑一遍语法检查、全部用例、build.sh --check 与包内容检查，
+      通过后把 deb 作为 artifact 留存。
+    - .github/workflows/release.yml：推 v* tag 自动发版 —— 先核对 tag 与
+      debian/control、debian/changelog 三处版本一致（不一致直接失败，不会
+      发出文件名和标题对不上的包），再跑测试、构建、生成说明，
+      最后 gh release create 带上 deb 与 SHA256SUMS。Release 已存在时改为
+      更新说明并覆盖附件，重推同一个 tag 不会报错。
+  * 新增 tools/check-deb.sh：不解包到磁盘，直接读包内文件做断言 —— 菜单项的
+    Name / Icon 与实际图标文件是否对得上、Exec 指向的二进制在不在包里、
+    控制脚本有没有执行位、有没有旧名字残留。CI 每次构建都跑。
+  * 新增 tools/changelog-notes.py：从 changelog 生成发布说明。原本这段逻辑
+    写在 release.sh 里，CI 也要用，抽出来两边共用，免得到处各存一份、
+    慢慢长得不一样。
+  * 加 Issue 表单：缺陷报告把 wps-copy --doctor 的输出设为必填（多数问题在
+    那段输出里就有答案），另有功能建议表单、PR 模板（界面类改动要求写手动
+    验证步骤），并关掉空白 Issue。
+  * README 加 CI 徽章，开发与发版两节改为以 CI 为主、本机脚本为备。
+
+ -- shuai <shuai@localhost>  Fri, 30 Oct 2026 15:42:00 +0800
+
 wps-clip-bridge (1.7.2) unstable; urgency=medium
 
   * 应用名称统一为「WPS 最近文档」。此前菜单项、托盘提示、通知的应用名是

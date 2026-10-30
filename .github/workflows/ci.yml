@@ -1,0 +1,79 @@
+name: CI
+
+# 只在 master 和 PR 上跑。tag 触发的构建交给 release.yml，
+# 免得同一个提交既跑 CI 又跑发版。
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# 同一分支的新提交进来时，把还在跑的旧任务取消掉，省 runner 额度
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试 + 打包（${{ matrix.os }} / Python ${{ matrix.python }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 目标环境是麒麟 V10（Python 3.8），开发机上又有 3.12，
+        # 两头都跑一遍。用系统 python 而不是 actions/setup-python：
+        # python3-gi 是 apt 包，装进的是系统解释器的 site-packages，
+        # 换成 setup-python 装的那份会 import 不到 gi。
+        include:
+          - os: ubuntu-22.04      # 系统 Python 3.10
+            python: "3.10"
+          - os: ubuntu-24.04      # 系统 Python 3.12
+            python: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          # build-essential 不需要；这里只要 GTK 绑定、Xlib、菜单项校验工具
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi gir1.2-gtk-3.0 python3-xlib \
+            desktop-file-utils dpkg-dev
+
+      - name: 确认解释器
+        run: |
+          python3 -V
+          python3 -c "import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk; print('GTK', Gtk.get_major_version(), Gtk.get_minor_version())"
+
+      - name: 语法检查
+        run: |
+          python3 -m compileall -q -x '_vendor' src
+          echo "src/ 全部文件编译通过"
+
+      - name: 单元测试
+        # 测试自己声明「不需要显示器、不需要会话总线」（见 tests/*.py 文件头），
+        # 所以这里不套 xvfb。真需要窗口的用例会用 skipIf 跳掉。
+        env:
+          GDK_BACKEND: x11
+        run: python3 -m unittest discover -s tests -v
+
+      - name: 构建安装包
+        run: ./build.sh --check
+
+      - name: 检查包内容
+        run: ./tools/check-deb.sh dist/wps-clip-bridge_*_all.deb
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.os }}
+          path: |
+            dist/wps-clip-bridge_*_all.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

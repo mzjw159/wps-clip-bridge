@@ -90,33 +90,11 @@ find "$OUT" -maxdepth 1 -name 'wps-clip-bridge_*_all.deb' -delete 2>/dev/null ||
 echo "    $(cat "$OUT/SHA256SUMS")"
 
 # ---- 发布说明 ----------------------------------------------------------
+# 生成逻辑在 tools/changelog-notes.py，CI 的发版流程用同一份，
+# 免得「本地发的说明」和「CI 发的说明」慢慢长得不一样。
 echo "==> 生成发布说明"
-VERSION="$VERSION" NOTES="$NOTES" DEBNAME="$DEBNAME" TAG="$TAG" \
-/usr/bin/env python3 - <<'PY' || die "生成发布说明失败"
-import io, os, re
-
-ver = os.environ['VERSION']
-raw = io.open('debian/changelog', encoding='utf-8').read()
-parts = re.split(r'(?m)^wps-clip-bridge \((\S+)\)', raw)
-sec = {parts[i]: parts[i + 1] for i in range(1, len(parts) - 1, 2)}
-if ver not in sec:
-    raise SystemExit('changelog 里没有 %s' % ver)
-
-lines = [l.strip() for l in sec[ver].splitlines()
-         if l.strip() and not l.startswith(' -- ')]
-lines = lines[1:]                        # 去掉 "unstable; urgency=medium" 那行
-
-out = ['## 本次更新', '']
-for l in lines:
-    if l.startswith('* '):
-        out.append('- ' + l[2:])
-    else:
-        out.append('  ' + l)             # changelog 里的续行保持缩进，读着像段落
-out += ['', '## 安装', '', '```bash', 'sudo dpkg -i ' + os.environ['DEBNAME'], '```', '',
-        '卸载：`sudo dpkg -r wps-clip-bridge`', '',
-        '## 校验', '', '```bash', 'sha256sum -c SHA256SUMS', '```', '']
-io.open(os.environ['NOTES'], 'w', encoding='utf-8').write('\n'.join(out))
-PY
+"$HERE/tools/changelog-notes.py" "$VERSION" -o "$NOTES" --deb "$DEBNAME" \
+    || die "生成发布说明失败"
 echo "    $NOTES（$(wc -l < "$NOTES") 行）"
 
 if [ "$DRY" -eq 1 ]; then

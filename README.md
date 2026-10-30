@@ -8,6 +8,7 @@
 到桌面、微信、邮件客户端直接 `Ctrl+V`。
 
 [![Release](https://img.shields.io/github/v/release/mzjw159/wps-clip-bridge?display_name=tag&sort=semver)](https://github.com/mzjw159/wps-clip-bridge/releases/latest)
+[![CI](https://github.com/mzjw159/wps-clip-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/mzjw159/wps-clip-bridge/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/mzjw159/wps-clip-bridge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Kylin%20V10%20%7C%20Debian%20%7C%20Ubuntu-2f6f4e)](#兼容性)
 [![Python](https://img.shields.io/badge/python-3.8%2B-3776ab)](#开发)
@@ -258,9 +259,10 @@ wps-clip-bridge/
 │   └── _vendor/             内置的 python-xlib 与 six
 ├── bin/                     5 个可执行入口（薄壳）
 ├── data/                    菜单项、自启项、图标、man page、AppStream 元数据
-├── tools/                   render-icons.py、release.sh
+├── tools/                   render-icons.py、release.sh、check-deb.sh、changelog-notes.py
 ├── tests/                   单元测试（不需要图形环境）
 ├── debian/                  control、维护脚本、copyright、changelog
+├── .github/                 CI、tag 触发发版、Issue / PR 模板
 └── docs/                    设计取舍、数据来源、排障、维护手册
 ```
 
@@ -285,27 +287,37 @@ python3 -m wpsclip.daemon        # 看护进程
 ```sh
 python3 -m unittest discover -s tests        # 全跑，约 2 秒
 python3 -m unittest tests.test_recent -v     # 只跑解析与多源兜底
+./tools/check-deb.sh                         # 打出来的包内容对不对
 ```
 
 > 动 `recent.py` 的解析规则之前先读 `tests/test_recent.py`：每条用例都对应一个真实
 > 踩过的坑。
 
+CI（`.github/workflows/ci.yml`）在 Ubuntu 22.04 / 24.04 上各跑一遍：语法检查 →
+全部用例 → `build.sh --check` → `check-deb.sh`，两个版本都过了才算过。
+
 ### 发版
 
+推 tag 就发版：
+
 ```sh
-./tools/release.sh
+git tag v1.7.3 && git push origin master --tags
 ```
 
-构建 → 校验和 → 从 changelog 生成发布说明 → 推 tag → `gh release create`。
-完整流程、换图标、`gh` 配置见 [docs/MAINTAINING.md](docs/MAINTAINING.md)。
+`.github/workflows/release.yml` 会核对版本号、跑测试、构建、生成说明、建 Release。
+本机也可以一条命令发（`./tools/release.sh`）。完整流程、换图标、CI 权限设置见
+[docs/MAINTAINING.md](docs/MAINTAINING.md)。
 
 ## 贡献
 
-Issue 和 PR 都欢迎。报问题请附上：
+Issue 和 PR 都欢迎，页面上的模板会把该填的东西（尤其是 `wps-copy --doctor` 的
+输出）问清楚 —— 那段输出里就有大半问题的答案。
 
-1. `wps-copy --doctor` 的输出；
-2. 系统版本与桌面环境（如 `麒麟 V10 SP1 / UKUI`）；
-3. 相关日志行（`~/.local/state/wps-clip-bridge/*.log`）。
+- 报缺陷 / 提功能：[新建 Issue](https://github.com/mzjw159/wps-clip-bridge/issues/new/choose)
+- 改代码：先看 [docs/DESIGN.md](docs/DESIGN.md) 里的取舍，有些看着「多余」的写法是
+  踩过坑才那么写的（文件头注释通常写了原因）
+- 提 PR 前：`python3 -m unittest discover -s tests` 和 `./tools/check-deb.sh` 要过；
+  动界面或托盘的话，PR 模板里有一栏专门用来写手动验证步骤
 
 ## 许可
 

@@ -1,0 +1,16 @@
+# 空白 Issue 关掉了：模板里那几项（尤其是 `wps-copy --doctor` 的输出）
+# 不是走形式，缺了它们基本查不下去。
+blank_issues_enabled: false
+
+contact_links:
+  - name: 装不上 / 打不开 / 点了没反应
+    url: https://github.com/mzjw159/wps-clip-bridge/blob/master/docs/TROUBLESHOOTING.md
+    about: 排障文档按症状列了原因和解决办法，多数情况在这里就能解决
+
+  - name: 怎么用、配置项是什么意思
+    url: https://github.com/mzjw159/wps-clip-bridge#readme
+    about: README 里有热键、命令行、配置文件的完整说明
+
+  - name: 想了解内部怎么实现的
+    url: https://github.com/mzjw159/wps-clip-bridge/blob/master/docs/DESIGN.md
+    about: 设计文档写了为什么绕开 WPS 按钮、为什么常驻、托盘为什么要自己实现
