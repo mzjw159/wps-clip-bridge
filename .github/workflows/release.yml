@@ -127,13 +127,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p dist
-          gh release download "$TAG" --pattern '*.deb' --dir dist
-          ls -l dist
+          # 下到单独的目录：仓库里 dist/ 本来就放着一份同名的 deb（打包产物
+          # 是提交进仓库的），gh release download 遇到同名文件会直接失败
+          mkdir -p pkgs
+          gh release download "$TAG" --pattern '*.deb' --dir pkgs
+          ls -l pkgs
 
       - name: 重新生成 Packages / Release
         run: |
-          python3 tools/build-apt-repo.py pages dist/*.deb
+          python3 tools/build-apt-repo.py pages pkgs/*.deb
           echo "--- Packages 里的版本 ---"
           grep -E '^(Package|Version|Filename):' \
             pages/apt/dists/stable/main/binary-all/Packages
