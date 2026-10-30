@@ -26,8 +26,21 @@ The clipboard is held by a background service, so closing any window does
 not invalidate the copied file.
 .SH OPTIONS
 .TP
-.B \-l, \-\-list
-List recent documents with their index numbers.
+.B \-l, \-\-list [\fIKEYWORD\fR ...]
+List recent documents: index, type, size, modification time and full path.
+Pinned documents are marked with a star; the index numbers are exactly what
+\fBwps\-copy \fIN\fR accepts.
+.B \-\-pinned
+limits the list to pinned documents and
+.B \-\-json
+emits machine-readable records (path, name, dir, kind, source, size, mtime,
+when, pinned).
+.TP
+.B \-\-pin \fIFILE\fR ... / \-\-unpin \fIFILE\fR ...
+Pin or unpin documents so they stay at the top of the picker list.
+Without arguments,
+.B \-\-pin
+prints the documents currently pinned.
 .TP
 .B \-f, \-\-file \fIFILE\fR ...
 Copy the given files instead of consulting the recent list.

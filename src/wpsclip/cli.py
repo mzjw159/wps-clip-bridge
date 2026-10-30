@@ -5,10 +5,14 @@
 用法::
 
     wps-copy                 # 复制最近修改的第 1 个文档
-    wps-copy --list          # 列出最近文档
+    wps-copy --list          # 列出最近文档（置顶的标 ★）
+    wps-copy --list 报告      # 只列名字/目录含「报告」的
+    wps-copy --list --json   # 给脚本用：JSON 数组，带大小、时间、来源
     wps-copy 3               # 复制清单里第 3 个
     wps-copy 报告            # 复制文件名含「报告」的（多个命中则列候选）
     wps-copy -f a.pdf b.doc  # 直接指定文件（可多个）
+    wps-copy --pin a.docx    # 置顶（可多个；不带参数则列出当前置顶）
+    wps-copy --unpin a.docx  # 取消置顶
     wps-copy --gui           # 打开图形界面
     wps-copy --start         # 立即启动后台服务（装完不用重启登录）
     wps-copy --stop          # 停止后台服务
@@ -16,9 +20,11 @@
     wps-copy --doctor        # 自检：数据源、依赖、会话类型、服务状态
     wps-copy --migrate       # 清理旧的手工部署（首次安装后跑一次）
 """
+import json
 import os
 import subprocess
 import sys
+import unicodedata
 
 from . import core, recent, service, wlclip
 
@@ -28,23 +34,164 @@ def usage(code=0):
     return code
 
 
-def cmd_list(args):
+def _disp_width(s):
+    """终端里占几列：CJK 全角算 2 列。
+
+    不这么算，中文名一多列就对不齐 —— 路径列一歪，「扫一眼找文件」就变慢。
+    """
+    return sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s)
+
+
+def _pad(s, width):
+    return s + ' ' * max(0, width - _disp_width(s))
+
+
+def _stat(p):
+    """(大小文字, 修改时间文字, 时间戳)；拿不到就退化，别让整行输出挂掉。"""
+    try:
+        st = os.stat(p)
+    except OSError:
+        return '?', '?', 0
+    import datetime
+    return (recent._fmt_size(st.st_size),
+            datetime.datetime.fromtimestamp(st.st_mtime).strftime('%m-%d %H:%M'),
+            st.st_mtime)
+
+
+def _entries(only_pinned=False):
+    """清单条目：[(路径, 是否置顶)]。默认顺序与 ``wps-copy <序号>`` 一致。
+
+    序号按修改时间排（不是置顶在前）—— 这样老用户照着清单敲的序号含义没变，
+    置顶只在前面加个 ★ 做标记。
+    """
+    pins = core.pinned_paths()
+    if only_pinned:
+        return [(p, True) for p in pins if os.path.isfile(p)]
+    pinset = set(pins)
     rows = recent.parse_recent(limit=core.conf_int('ui', 'limit', 80))
+    return [(p, p in pinset) for p in rows]
+
+
+def cmd_list(args):
+    as_json = False
+    only_pinned = False
+    words = []
+    for a in args:
+        if a in ('--json', '-j'):
+            as_json = True
+        elif a in ('--pinned', '-p', '--pin-only'):
+            only_pinned = True
+        elif a in ('-h', '--help'):
+            return usage(0)
+        elif a.startswith('-'):
+            print('未知选项：%s' % a)
+            return 2
+        else:
+            words.append(a.lower())
+
+    rows = _entries(only_pinned=only_pinned)
+    if words:
+        rows = [(p, pin) for (p, pin) in rows
+                if all(w in p.lower() for w in words)]
+
+    if as_json:
+        out = []
+        for p, pin in rows:
+            size, when, mt = _stat(p)
+            out.append({
+                'path': p,
+                'name': os.path.basename(p),
+                'dir': os.path.dirname(p),
+                'kind': recent.type_label(p),
+                'source': recent.source_of(p),
+                'size': size,
+                'mtime': mt,
+                'when': when,
+                'pinned': pin,
+            })
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+
     if not rows:
+        if words or only_pinned:
+            scope = '置顶的文档' if only_pinned else '文档'
+            kw = '、'.join(words)
+            print('没有符合条件的%s%s。' % (scope, '（关键词：%s）' % kw if kw else ''))
+            if only_pinned:
+                print('用 wps-copy --pin <文件> 置顶，或 wps-copy --list 看全部。')
+            else:
+                print('去掉关键词再试，或 wps-copy --doctor 看数据源。')
+            return 1
         print('没有读到 WPS 最近文档。')
         print(recent.diagnose()['hint'])
         print('详细自检：wps-copy --doctor')
         return 1
+
     width = len(str(len(rows)))
-    for i, p in enumerate(rows, 1):
-        print('%*d. [%s] %s' % (width, i, recent.kind_of(p), p))
-    print('\n共 %d 个。用 wps-copy <序号> 或 <关键词> 复制。' % len(rows))
+    kind_w = max(_disp_width(recent.type_label(p)) for p, _ in rows)
+    size_w = max(_disp_width(_stat(p)[0]) for p, _ in rows)
+    for i, (p, pin) in enumerate(rows, 1):
+        size, when, _mt = _stat(p)
+        # 大小右对齐（数字比宽度有意义），类型左对齐（中文还好，PDF 是三个字符）
+        print('%*d. %s %s  %s  %s  %s'
+              % (width, i, '★' if pin else ' ',
+                 _pad(recent.type_label(p), kind_w),
+                 ' ' * (size_w - _disp_width(size)) + size,
+                 when, p))
+    npin = sum(1 for _p, pin in rows if pin)
+    print('\n共 %d 个%s。复制：wps-copy <序号> 或 wps-copy <关键词>'
+          % (len(rows), '（%d 个置顶）' % npin if npin else ''))
+    print('  给脚本用：wps-copy --list --json')
     return 0
+
+
+def cmd_pin(args, add=True):
+    """置顶 / 取消置顶。不带参数时列出当前置顶，顺便当用法提示。"""
+    pins = core.pinned_paths()
+    if not args:
+        if not pins:
+            print('还没有置顶的文档。用法：wps-copy --pin <文件> [<文件>…]')
+            return 0
+        print('当前置顶 %d 个：' % len(pins))
+        for i, p in enumerate(pins, 1):
+            mark = '' if os.path.isfile(p) else '  （文件不在了）'
+            print('  %d. %s%s' % (i, p, mark))
+        print('\n取消：wps-copy --unpin <文件>')
+        return 0
+
+    changed, bad, todo = [], [], []
+    for a in args:
+        p = os.path.abspath(os.path.expanduser(a))
+        if not os.path.isfile(p):
+            bad.append(p)
+            continue
+        if p not in todo:
+            todo.append(p)
+
+    if add:
+        # 新钉的排在最前（刚钉的就是当下最关心的），但一条命令里钉多个时
+        # 保留命令行里的先后顺序，别被倒过来。
+        changed = [p for p in todo if p not in pins]
+        pins = changed + pins
+    else:
+        changed = [p for p in todo if p in pins]
+        pins = [p for p in pins if p not in changed]
+    if changed:
+        core.set_pinned(pins)
+    for p in changed:
+        print('✔ %s：%s' % ('已置顶' if add else '已取消置顶', p))
+    for p in bad:
+        print('✘ 文件不存在：%s' % p)
+    if not changed and not bad:
+        print('已经%s了，无需改动。' % ('置顶' if add else '取消置顶'))
+    print('当前置顶 %d 个（wps-copy --pin 可查看列表）。' % len(pins))
+    return 0 if not bad else 1
 
 
 def pick(args):
     """把参数解析成文件路径列表。"""
-    rows = recent.parse_recent(limit=core.conf_int('ui', 'limit', 80))
+    # 与 --list 用同一份清单：清单第 3 行必须就是 wps-copy 3 复制的东西
+    rows = [p for p, _pin in _entries()]
     target = args[0]
 
     if target.isdigit():
@@ -366,6 +513,10 @@ def main(argv=None):
         return 0
     if args[0] in ('-l', '--list', 'list'):
         return cmd_list(args[1:])
+    if args[0] in ('--pin', 'pin', '--pinned'):
+        return cmd_pin(args[1:], add=True)
+    if args[0] in ('--unpin', 'unpin'):
+        return cmd_pin(args[1:], add=False)
     if args[0] in ('-g', '--gui', 'gui'):
         return cmd_gui(args[1:])
     if args[0] in ('-s', '--status', 'status'):

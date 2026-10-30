@@ -374,5 +374,48 @@ class DiagnoseTest(unittest.TestCase):
         self.assertIn('共 1 个文档', info['hint'])
 
 
+class LabelChoicesTest(unittest.TestCase):
+    """类型/来源的人话标签，界面下拉与命令行都在用。
+
+    这里额外钉一条：**下拉里的每个选项都必须真能命中**。选项和判定函数各改各的
+    （比如加了「图片」却忘了让 type_label 认 png），用户选了那项只会看到空列表，
+    还以为是文件没了。
+    """
+
+    def test_type_labels(self):
+        cases = {
+            '/a.docx': '文档', '/a.wps': '文档', '/a.rtf': '文档',
+            '/a.xlsx': '表格', '/a.csv': '表格', '/a.ett': '表格',
+            '/a.pptx': '演示', '/a.dps': '演示',
+            '/a.pdf': 'PDF', '/a.ofd': 'PDF',
+            '/a.txt': '文本', '/a.md': '文本',
+            '/a.png': '图片', '/a.JPEG': '图片',
+            '/a.xyz': '其他', '/noext': '其他',
+        }
+        for p, want in cases.items():
+            self.assertEqual(recent.type_label(p), want, p)
+
+    def test_every_type_choice_is_reachable(self):
+        samples = ['/a.docx', '/a.xlsx', '/a.pptx', '/a.pdf', '/a.txt',
+                   '/a.png', '/a.xyz']
+        got = set(recent.type_label(p) for p in samples)
+        self.assertEqual(got, set(recent.TYPE_CHOICES))
+
+    def test_every_source_choice_is_reachable(self):
+        samples = ['/home/u/WPS Cloud Files/a.docx',
+                   '/home/u/xwechat_files/a.docx',
+                   '/home/u/Desktop/a.docx']
+        got = set(recent.source_of(p) for p in samples)
+        self.assertEqual(got, set(recent.SOURCE_CHOICES))
+
+    def test_source_of(self):
+        self.assertEqual(recent.source_of('/home/u/wpscloud/a.docx'), '云端')
+        self.assertEqual(recent.source_of('/home/u/微信/a.docx'), '微信')
+        self.assertEqual(recent.source_of('/tmp/a.docx'), '本地')
+        # 云端优先：路径里同时出现两者时按云端算
+        self.assertEqual(
+            recent.source_of('/home/u/WPS Cloud Files/wechat/a.docx'), '云端')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -97,25 +97,49 @@ def human_size(n):
     return str(n)
 
 
-def source_of(path):
-    """来源：云端 / 微信 / 本地。"""
-    low = path.lower()
-    if 'wps cloud files' in low or 'wpscloud' in low or '云文档' in path:
-        return '云端'
-    if 'wechat' in low or 'xwechat_files' in low or '微信' in path:
-        return '微信'
-    return '本地'
+# 来源/类型的判断逻辑在 recent 里（命令行也要用），这里只留别名，界面内部
+# 继续叫这两个名字，测试与旧代码都不受影响。
+source_of = recent.source_of
+type_label = recent.type_label
 
 
-def type_label(path):
-    ext = os.path.splitext(path)[1].lower()
-    return {
-        '.doc': '文档', '.docx': '文档', '.wps': '文档', '.wpt': '文档', '.rtf': '文档',
-        '.xls': '表格', '.xlsx': '表格', '.et': '表格', '.ett': '表格', '.csv': '表格',
-        '.ppt': '演示', '.pptx': '演示', '.dps': '演示', '.dpt': '演示',
-        '.pdf': 'PDF', '.ofd': 'PDF',
-        '.txt': '文本', '.md': '文本',
-    }.get(ext, '其他')
+def highlight_markup(text, kw, tag_start='<span background="#ffe066" foreground="#1a1a1a">'):
+    """把 text 里命中 kw 的每一段包上高亮，返回 Pango markup。
+
+    搜索框一输字，列表里那一行的匹配位置要能一眼看到 —— 只把整行留下、
+    让用户自己找是哪几个字，等于没筛。高亮用底色 + 深色字：深色主题下
+    只改前景色会和背景糊在一起，底色 + 固定深色字两种主题都读得清。
+
+    大小写不敏感（和搜索一致）。少数语言里 lower() 会改变长度（如 'İ'），
+    那时索引对不上，宁可不加高亮也不要把字标错。
+    """
+    if not text:
+        return ''
+    if not kw:
+        return GLib.markup_escape_text(text)
+    low, k = text.lower(), kw.lower()
+    if len(low) != len(text) or not k:
+        return GLib.markup_escape_text(text)
+    out, i = [], 0
+    while True:
+        hit = low.find(k, i)
+        if hit < 0:
+            out.append(GLib.markup_escape_text(text[i:]))
+            break
+        out.append(GLib.markup_escape_text(text[i:hit]))
+        out.append(tag_start + GLib.markup_escape_text(text[hit:hit + len(k)])
+                   + '</span>')
+        i = hit + len(k)
+    return ''.join(out)
+
+
+def match_filter(path, type_sel='', src_sel=''):
+    """筛选条件是否命中：类型与来源可以同时生效，空字符串表示「全部」。"""
+    if type_sel and type_label(path) != type_sel:
+        return False
+    if src_sel and source_of(path) != src_sel:
+        return False
+    return True
 
 
 def type_icon(path):
@@ -276,6 +300,9 @@ def tray_recent_entries(pinned, paths, limit=5, exists=os.path.isfile):
 class App(object):
     def __init__(self):
         self.rows = []
+        # 当前搜索词（已转小写）。单元格渲染要拿它做高亮，所以存在实例上而不是
+        # 每次去问搜索框 —— 重绘不只发生在 reload 里。
+        self._kw = ''
         # 未过滤的完整列表：托盘菜单的「最近 5 个」用它，免得搜索时托盘跟着变
         self._all_paths = []
         self.wake_mtime = core.mtime(core.gui_wake_path())
@@ -340,6 +367,27 @@ class App(object):
         self.entry.set_placeholder_text('搜索文件名或文件夹…')
         self.entry.connect('search-changed', self.on_search)
         toolbar.pack_start(self.entry, True, True, 0)
+
+        # 筛选：类型 / 来源两个下拉，可以叠加（「表格」+「微信」就是微信来的表格）。
+        # 不做成设置项、也不持久化 —— 打开窗口默认看到全部才符合直觉，
+        # 筛完关掉再打开应该还原，而不是让人以为文件丢了。
+        self.type_combo = Gtk.ComboBoxText()
+        self.type_combo.append_text('全部类型')
+        for _t in recent.TYPE_CHOICES:
+            self.type_combo.append_text(_t)
+        self.type_combo.set_active(0)          # 先定好初值再接信号，否则构造期就 reload
+        self.type_combo.set_tooltip_text('只看某一类文档（可和右边的来源叠加）')
+        self.type_combo.connect('changed', lambda *a: self.reload())
+        toolbar.pack_start(self.type_combo, False, False, 0)
+
+        self.src_combo = Gtk.ComboBoxText()
+        self.src_combo.append_text('全部来源')
+        for _s in recent.SOURCE_CHOICES:
+            self.src_combo.append_text(_s)
+        self.src_combo.set_active(0)
+        self.src_combo.set_tooltip_text('只看云端 / 微信 / 本地来的文档')
+        self.src_combo.connect('changed', lambda *a: self.reload())
+        toolbar.pack_start(self.src_combo, False, False, 0)
 
         self.refresh_btn = Gtk.Button()
         self.refresh_btn.set_image(Gtk.Image.new_from_icon_name(
@@ -417,7 +465,7 @@ class App(object):
         dir_cell.set_property('ellipsize', 3)
         col = Gtk.TreeViewColumn('所在文件夹')
         col.pack_start(dir_cell, True)
-        col.set_cell_data_func(dir_cell, self._plain_func(C_DIR))
+        col.set_cell_data_func(dir_cell, self._dir_func)
         col.set_min_width(160)
         view.append_column(col)
 
@@ -781,8 +829,18 @@ class App(object):
                               % (GLib.markup_escape_text(model[it][C_NAME]),
                                  GLib.markup_escape_text(count)))
         else:
+            # 匹配到的字加底色：只把行留下、让人自己找是哪几个字，等于没筛
             cell.set_property('markup',
-                              GLib.markup_escape_text(model[it][C_NAME] or ''))
+                              highlight_markup(model[it][C_NAME] or '', self._kw))
+
+    def _dir_func(self, _col, cell, model, it, _data):
+        if model[it][C_ISGROUP]:
+            cell.set_property('markup', '')
+            return
+        # 搜索也匹配文件夹，这里同样高亮 —— 命中在目录名上时名称列是干净的，
+        # 不高亮的话看不出这行为什么被留下
+        cell.set_property('markup',
+                          highlight_markup(model[it][C_DIR] or '', self._kw))
 
     def _source_func(self, _col, cell, model, it, _data):
         if model[it][C_ISGROUP]:
@@ -837,14 +895,38 @@ class App(object):
         self.rows.append(p)
         return mt
 
+    def _type_filter(self):
+        """下拉里选的类型；第 0 项是「全部类型」，返回空串表示不筛。"""
+        try:
+            idx = self.type_combo.get_active()
+            return '' if idx <= 0 else (self.type_combo.get_active_text() or '')
+        except Exception:
+            return ''
+
+    def _src_filter(self):
+        try:
+            idx = self.src_combo.get_active()
+            return '' if idx <= 0 else (self.src_combo.get_active_text() or '')
+        except Exception:
+            return ''
+
+    def _filter_label(self):
+        """「表格 / 微信」这样的一行字，状态栏和空列表提示共用。"""
+        return ' / '.join(x for x in (self._type_filter(), self._src_filter()) if x)
+
     def reload(self):
         self.store.clear()
         kw = self.entry.get_text().strip().lower()
+        self._kw = kw
+        tsel, ssel = self._type_filter(), self._src_filter()
         paths = recent.parse_recent(limit=max(200, core.conf_int('ui', 'limit', 80)))
-        # 托盘菜单的「最近 5 个」用完整列表，不受搜索框过滤影响
+        # 托盘菜单的「最近 5 个」用完整列表：搜索和筛选都只是「看」的姿势，
+        # 不该把「合上窗口也能随手复制最近文档」这条路径改窄。
         self._all_paths = list(paths)
 
         def keep(p):
+            if not match_filter(p, tsel, ssel):
+                return False
             if not kw:
                 return True
             return kw in os.path.basename(p).lower() or kw in os.path.dirname(p).lower()
@@ -894,14 +976,31 @@ class App(object):
         self.copy_btn.set_label('复制选中文件')
         if total:
             npin = len(pinned)
+            extra = '（%d 个置顶）' % npin if npin else ''
+            flt = self._filter_label()
+            if flt:
+                extra += ' · 筛选：%s' % flt
             self.set_status('共 %d 个文档%s · 双击或回车复制，↑↓ 选择，Ctrl/Shift 多选'
-                            % (total, '（%d 个置顶）' % npin if npin else ''))
+                            % (total, extra))
             self.status.set_tooltip_text(None)
             self._show_empty_hint('')
-        elif kw:
-            self.set_status('没有匹配「%s」的文档' % kw)
+        elif kw or self._filter_label():
+            # 搜不到有两种原因：关键词不对，或者筛选条件把它挡掉了。
+            # 只说「没有匹配」的话，用户不会想到是上面那两个下拉干的。
+            flt = self._filter_label()
+            if kw and flt:
+                msg = '没有同时符合「%s」和筛选（%s）的文档' % (kw, flt)
+            elif kw:
+                msg = '没有匹配「%s」的文档' % kw
+            else:
+                msg = '筛选（%s）下没有文档' % flt
+            hint = msg + '\n换个关键词'
+            if flt:
+                hint += '，或把筛选调回「全部」'
+            hint += '，或清空搜索框'
+            self.set_status(msg)
             self.status.set_tooltip_text(None)
-            self._show_empty_hint('没有匹配「%s」的文档\n换个关键词，或清空搜索框' % kw)
+            self._show_empty_hint(hint)
         else:
             # 列表空的三种原因（没装 WPS / 格式变了 / 文件被删）要分清，
             # 否则用户只看到一句「没读到最近文档」，不知道该找谁。
@@ -1268,7 +1367,20 @@ class App(object):
 
     def on_key(self, widget, event):
         key = event.keyval
+        # Ctrl+F 回到搜索框：手在键盘上时不用去够鼠标
+        if key in (Gdk.KEY_f, Gdk.KEY_F) and (event.state & Gdk.ModifierType.CONTROL_MASK):
+            self.entry.grab_focus()
+            self.entry.select_region(0, -1)      # 连按两次可以直接改写
+            return True
         if key == Gdk.KEY_Escape:
+            # 正在搜索时 Esc 先清空搜索框（搜索框里的通行做法），再按一次才收窗口。
+            # 否则「搜错了想退出来」会连着把窗口也关掉。
+            try:
+                if self.entry.is_focus() and self.entry.get_text():
+                    self.entry.set_text('')
+                    return True
+            except Exception:
+                pass
             if core.conf_bool('ui', 'close_to_tray', True) and self.tray_available():
                 self._save_geometry()
                 self.win.hide()

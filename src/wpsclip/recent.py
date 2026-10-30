@@ -392,6 +392,41 @@ def kind_of(path):
     }.get(ext, '·')
 
 
+def source_of(path):
+    """来源：云端 / 微信 / 本地。
+
+    放在这里而不是 gui 里，是因为命令行也要用 —— 而命令行不能 import gui
+    （那会把 GTK 拖进来，终端里没显示就起不来）。gui 直接引用这个名字。
+    """
+    low = path.lower()
+    if 'wps cloud files' in low or 'wpscloud' in low or '云文档' in path:
+        return '云端'
+    if 'wechat' in low or 'xwechat_files' in low or '微信' in path:
+        return '微信'
+    return '本地'
+
+
+_TYPE_BY_EXT = {
+    '.doc': '文档', '.docx': '文档', '.wps': '文档', '.wpt': '文档', '.rtf': '文档',
+    '.xls': '表格', '.xlsx': '表格', '.et': '表格', '.ett': '表格', '.csv': '表格',
+    '.ppt': '演示', '.pptx': '演示', '.dps': '演示', '.dpt': '演示',
+    '.pdf': 'PDF', '.ofd': 'PDF',
+    '.txt': '文本', '.md': '文本',
+    '.png': '图片', '.jpg': '图片', '.jpeg': '图片', '.gif': '图片',
+    '.bmp': '图片', '.webp': '图片',
+}
+
+# 筛选下拉用的取值顺序（与列表里能出现的类型一致）
+TYPE_CHOICES = ('文档', '表格', '演示', 'PDF', '文本', '图片', '其他')
+SOURCE_CHOICES = ('云端', '微信', '本地')
+
+
+def type_label(path):
+    """类型的人话标记：文档 / 表格 / 演示 / PDF / 文本 / 图片 / 其他。"""
+    ext = os.path.splitext(path)[1].lower()
+    return _TYPE_BY_EXT.get(ext, '其他')
+
+
 if __name__ == '__main__':
     for i, p in enumerate(parse_recent(), 1):
         print('%2d. %s' % (i, p))

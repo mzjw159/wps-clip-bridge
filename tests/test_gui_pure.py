@@ -70,6 +70,80 @@ class TypeLabelTest(unittest.TestCase):
 
 
 @_need_gi
+class HighlightMarkupTest(unittest.TestCase):
+    """搜索结果高亮：命中的字要加底色，其余原样（含转义）。"""
+
+    def test_single_hit(self):
+        out = gui.highlight_markup('合同2026.docx', '2026')
+        self.assertIn('<span background=', out)
+        self.assertIn('>2026</span>', out)
+        self.assertTrue(out.startswith('合同'))
+
+    def test_multiple_hits(self):
+        out = gui.highlight_markup('aXbXc', 'x')
+        self.assertEqual(out.count('<span background='), 2)
+
+    def test_case_insensitive_keeps_original_case(self):
+        out = gui.highlight_markup('Report.DOCX', 'docx')
+        self.assertIn('>DOCX</span>', out)      # 显示原文大小写，不是匹配串
+
+    def test_no_keyword_is_escaped_only(self):
+        self.assertEqual(gui.highlight_markup('a<b>c', ''), 'a&lt;b&gt;c')
+
+    def test_no_hit_is_escaped_only(self):
+        self.assertEqual(gui.highlight_markup('a<b>c', 'zzz'), 'a&lt;b&gt;c')
+
+    def test_markup_in_name_cannot_break_out(self):
+        # 文件名里的尖括号必须被转义，否则整行 markup 解析失败、文字消失
+        out = gui.highlight_markup('<i>x</i>报告', '报告')
+        self.assertNotIn('<i>', out)
+        self.assertIn('&lt;i&gt;', out)
+        self.assertIn('>报告</span>', out)
+
+    def test_markup_in_keyword_cannot_break_out(self):
+        out = gui.highlight_markup('a<b', '<b')
+        self.assertIn('&lt;b</span>', out)
+
+    def test_cjk_keyword(self):
+        out = gui.highlight_markup('/home/u/桌面/季度报告.docx', '季度')
+        self.assertIn('>季度</span>', out)
+
+    def test_empty_text(self):
+        self.assertEqual(gui.highlight_markup('', 'x'), '')
+
+    def test_length_changing_lower_degrades(self):
+        # 'İ'.lower() 长度变了，索引会对不上；宁可不标，也不能标错位置
+        out = gui.highlight_markup('İstanbul.docx', 'docx')
+        self.assertNotIn('<span background=', out)
+
+
+@_need_gi
+class MatchFilterTest(unittest.TestCase):
+    """类型 / 来源筛选，两个维度可叠加，空串表示不筛。"""
+
+    def test_no_filter_matches_everything(self):
+        self.assertTrue(gui.match_filter('/x/a.xyz', '', ''))
+
+    def test_type_only(self):
+        self.assertTrue(gui.match_filter('/x/a.xlsx', '表格', ''))
+        self.assertFalse(gui.match_filter('/x/a.xlsx', '文档', ''))
+
+    def test_source_only(self):
+        p = '/home/u/WPS Cloud Files/a.docx'
+        self.assertTrue(gui.match_filter(p, '', '云端'))
+        self.assertFalse(gui.match_filter(p, '', '本地'))
+
+    def test_both_must_match(self):
+        p = '/home/u/WeChat Files/a.xlsx'
+        self.assertTrue(gui.match_filter(p, '表格', '微信'))
+        self.assertFalse(gui.match_filter(p, '文档', '微信'))
+        self.assertFalse(gui.match_filter(p, '表格', '云端'))
+
+    def test_unknown_type_never_matches(self):
+        self.assertFalse(gui.match_filter('/x/a.xyz', '文档', ''))
+
+
+@_need_gi
 class TypeIconTest(unittest.TestCase):
     def test_icons(self):
         cases = {
