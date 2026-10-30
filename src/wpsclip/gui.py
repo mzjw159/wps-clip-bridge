@@ -251,9 +251,33 @@ def _install_default_icon():
     return pbs
 
 
+def tray_recent_entries(pinned, paths, limit=5, exists=os.path.isfile):
+    """托盘菜单里「最近文档」那几行：置顶优先、去重、重名补上文件夹名。
+
+    抽成模块级纯函数是为了能单独测：菜单项错一位用户就会点到别的文件，
+    这种 bug 在界面上根本看不出来。
+    """
+    ordered = []
+    for p in list(pinned) + list(paths):
+        if p and p not in ordered and exists(p):
+            ordered.append(p)
+    out, seen = [], {}
+    for p in ordered[:limit]:
+        label = os.path.basename(p)
+        n = seen.get(label, 0) + 1
+        seen[label] = n
+        if n > 1:
+            # 重名时补上文件夹名，否则菜单里两行一模一样，点错了也不知道
+            label = '%s（%s）' % (label, os.path.basename(os.path.dirname(p)))
+        out.append((label, p))
+    return out
+
+
 class App(object):
     def __init__(self):
         self.rows = []
+        # 未过滤的完整列表：托盘菜单的「最近 5 个」用它，免得搜索时托盘跟着变
+        self._all_paths = []
         self.wake_mtime = core.mtime(core.gui_wake_path())
         self.tray = None
         self._ticks = 0
@@ -637,9 +661,30 @@ class App(object):
         t = Tray(on_show=self.show_window,
                  on_copy=self.copy_latest,
                  on_settings=self.open_settings,
-                 on_quit=self.quit_app)
+                 on_quit=self.quit_app,
+                 on_copy_path=self.copy_paths,
+                 on_recent=self._tray_recent)
         if t.start():
             self.tray = t
+
+    # 托盘菜单里最多列几条最近文档。5 条是「够用又不至于把菜单撑长」的经验值：
+    # 再多就比打开窗口还慢了。
+    TRAY_RECENT = 5
+
+    def _tray_recent(self):
+        """托盘菜单里的「最近文档」几行，返回 [(短标签, 路径), ...]。
+
+        置顶的排前面（托盘菜单也是用户最常用的入口，置顶在那儿更该生效）。
+        不重新解析配置文件：用窗口上次 reload 的结果，D-Bus 调用里读磁盘会
+        把面板的菜单卡住。
+        """
+        paths = list(self._all_paths)
+        if not paths:
+            try:
+                paths = recent.parse_recent(limit=self.TRAY_RECENT * 2)
+            except Exception:
+                paths = []
+        return tray_recent_entries(core.pinned_paths(), paths, self.TRAY_RECENT)
 
     def tray_available(self):
         return self.tray is not None and self.tray.available
@@ -778,16 +823,51 @@ class App(object):
         lines.append('详细自检：wps-copy --doctor')
         return '\n'.join(lines)
 
+    def _add_file(self, parent, p, mt=None, size=None):
+        """往列表里插一行文件（分组行不走这里）。"""
+        if mt is None:
+            try:
+                st = os.stat(p)
+                mt, size = st.st_mtime, human_size(st.st_size)
+            except OSError:
+                mt, size = 0, '?'
+        self.store.append(parent, [
+            False, type_icon(p), os.path.basename(p), source_of(p),
+            type_label(p), size, os.path.dirname(p), when_str(mt), p, mt])
+        self.rows.append(p)
+        return mt
+
     def reload(self):
         self.store.clear()
         kw = self.entry.get_text().strip().lower()
         paths = recent.parse_recent(limit=max(200, core.conf_int('ui', 'limit', 80)))
+        # 托盘菜单的「最近 5 个」用完整列表，不受搜索框过滤影响
+        self._all_paths = list(paths)
+
+        def keep(p):
+            if not kw:
+                return True
+            return kw in os.path.basename(p).lower() or kw in os.path.dirname(p).lower()
+
+        self.rows = []
+        total = 0
+
+        # 置顶：单独一组放最前，时间分组里不再重复出现。
+        # 文件已经不在了就先不显示（U 盘没插、目录被挪走都会这样），但也不
+        # 从配置里删 —— 换回来还应该在。
+        pinned_all = core.pinned_paths()
+        pinned = [p for p in pinned_all if os.path.isfile(p) and keep(p)]
+        if pinned:
+            grow = self.store.append(None, [
+                True, '', '置顶', '', '', '%d 个' % len(pinned), '', '', '', 0.0])
+            for p in pinned:
+                self._add_file(grow, p)
+            total += len(pinned)
+        pinned_set = set(pinned_all)
 
         buckets = {}
         for p in paths:
-            name = os.path.basename(p)
-            d = os.path.dirname(p)
-            if kw and kw not in name.lower() and kw not in d.lower():
+            if p in pinned_set or not keep(p):
                 continue
             try:
                 st = os.stat(p)
@@ -795,22 +875,17 @@ class App(object):
             except OSError:
                 mt, size = 0, '?'
             key, label = bucket_of(mt)
-            buckets.setdefault(key, (label, []))[1].append((p, name, d, size, mt))
+            buckets.setdefault(key, (label, []))[1].append((p, size, mt))
 
-        total = 0
-        self.rows = []
         for key in sorted(buckets):
             label, items = buckets[key]
             if not items:
                 continue
-            items.sort(key=lambda x: x[4], reverse=True)
+            items.sort(key=lambda x: x[2], reverse=True)
             grow = self.store.append(None, [
                 True, '', label, '', '', '%d 个' % len(items), '', '', '', 0.0])
-            for (p, name, d, size, mt) in items:
-                self.store.append(grow, [
-                    False, type_icon(p), name, source_of(p), type_label(p),
-                    size, d, when_str(mt), p, mt])
-                self.rows.append(p)
+            for (p, size, mt) in items:
+                self._add_file(grow, p, mt, size)
             total += len(items)
 
         self.view.expand_all()
@@ -818,8 +893,9 @@ class App(object):
         self.copy_btn.set_sensitive(False)
         self.copy_btn.set_label('复制选中文件')
         if total:
-            self.set_status('共 %d 个文档 · 双击复制、拖到微信，Ctrl/Shift 可多选'
-                            % total)
+            npin = len(pinned)
+            self.set_status('共 %d 个文档%s · 双击或回车复制，↑↓ 选择，Ctrl/Shift 多选'
+                            % (total, '（%d 个置顶）' % npin if npin else ''))
             self.status.set_tooltip_text(None)
             self._show_empty_hint('')
         elif kw:
@@ -833,6 +909,13 @@ class App(object):
             self.set_status('没读到最近文档 —— 原因见中间的提示')
             self.status.set_tooltip_text(self._diagnose_detail(info))
             self._show_empty_hint('%s\n\n详细自检：wps-copy --doctor' % info['hint'])
+
+        # 列表变了，托盘菜单里的「最近 5 个」要跟着变
+        try:
+            if getattr(self, 'tray', None) is not None:
+                self.tray.refresh_menu()
+        except Exception as ex:
+            core.log('刷新托盘菜单失败: %r' % (ex,))
 
     def _show_empty_hint(self, text):
         try:
@@ -941,6 +1024,12 @@ class App(object):
 
     def show_context_menu(self, event):
         n = len(self.selected_paths())
+        cur = self.current_path()
+        pinned = bool(cur) and core.is_pinned(cur)
+        if n <= 1:
+            pin_label = '取消置顶' if pinned else '置顶到最前'
+        else:
+            pin_label = '取消置顶' if pinned else '把这 %d 个置顶' % n
         menu = Gtk.Menu()
         entries = (
             ('打开' if n <= 1 else '打开 %d 个文件' % n, self.on_open_file),
@@ -948,6 +1037,8 @@ class App(object):
             ('复制（放进剪贴板）' if n <= 1 else '复制 %d 个文件' % n,
              self.on_copy_clicked),
             ('复制文件路径' if n <= 1 else '复制 %d 条路径' % n, self.on_copy_path),
+            (None, None),
+            (pin_label, self.on_toggle_pin),
             (None, None),
             ('移到回收站' if n <= 1 else '把 %d 个移到回收站' % n, self.on_delete),
         )
@@ -1078,6 +1169,30 @@ class App(object):
             self.set_status('已移到回收站：%d 个' % ok)
         self.reload()
 
+    def on_toggle_pin(self, *_):
+        """置顶 / 取消置顶。多选时以第一项的状态决定整批怎么切。"""
+        paths = self.selected_paths()
+        if not paths:
+            return
+        want = not core.is_pinned(paths[0])
+        cur = core.pinned_paths()
+        if want:
+            # 倒序插入，多选时保持列表里的原有顺序
+            for p in reversed(paths):
+                if p not in cur:
+                    cur.insert(0, p)
+        else:
+            drop = set(paths)
+            cur = [p for p in cur if p not in drop]
+        core.set_pinned(cur)
+        self.reload()
+        if want:
+            self.set_status('已置顶 %d 个（在列表最上方）' % len(paths) if len(paths) > 1
+                            else '已置顶：%s' % os.path.basename(paths[0]))
+        else:
+            self.set_status('已取消置顶 %d 个' % len(paths) if len(paths) > 1
+                            else '已取消置顶：%s' % os.path.basename(paths[0]))
+
     def on_browse(self, *_):
         dlg = Gtk.FileChooserDialog(title='选择要复制的文件', parent=self.win,
                                     action=Gtk.FileChooserAction.OPEN)
@@ -1099,8 +1214,61 @@ class App(object):
         self.quit_app()
         return True
 
+    def _file_rows(self):
+        """列表里所有可选行（跳过分组标题）的 TreePath，按显示顺序。"""
+        out = []
+
+        def walk(it):
+            while it is not None:
+                if self.store[it][C_ISGROUP]:
+                    walk(self.store.iter_children(it))
+                else:
+                    out.append(self.store.get_path(it))
+                it = self.store.iter_next(it)
+
+        walk(self.store.get_iter_first())
+        return out
+
+    def _select_rows(self, rows):
+        sel = self.view.get_selection()
+        sel.unselect_all()
+        for p in rows:
+            sel.select_path(p)
+        if rows:
+            self.view.set_cursor(rows[0], None, False)
+            self.view.scroll_to_cell(rows[0], None, False, 0.5, 0)
+
+    def _nav_key(self, key):
+        """上下键。返回 True 表示「这一下我处理了」。
+
+        两种情况 GTK 自己处理不好：
+        * 列表里一个都没选中时按 ↓ —— 它只搬 cursor 不选中，看着像没反应；
+        * 焦点在搜索框里按 ↓ —— 事件根本到不了列表，用户搜完想直接选第一项。
+        已经有选中且焦点在列表上时返回 False，交给 GTK 按原样走（多选、
+        Shift 连选那些行为保持不变）。
+        """
+        down = key in (Gdk.KEY_Down, Gdk.KEY_KP_Down)
+        focused = self.view.is_focus()
+        if focused and self.selected_paths():
+            return False
+        rows = self._file_rows()
+        if not rows:
+            return False
+        self.view.grab_focus()
+        sel = self.selected_paths()
+        if sel:
+            # 焦点从搜索框切回来：停在原来的选中项上，别把用户的选择弄丢
+            for rp in rows:
+                if self.store[self.store.get_iter(rp)][C_PATH] == sel[0]:
+                    self.view.set_cursor(rp, None, False)
+                    self.view.scroll_to_cell(rp, None, False, 0.5, 0)
+                    return True
+        self._select_rows([rows[0] if down else rows[-1]])
+        return True
+
     def on_key(self, widget, event):
-        if event.keyval == Gdk.KEY_Escape:
+        key = event.keyval
+        if key == Gdk.KEY_Escape:
             if core.conf_bool('ui', 'close_to_tray', True) and self.tray_available():
                 self._save_geometry()
                 self.win.hide()
@@ -1108,10 +1276,26 @@ class App(object):
                 self.quit_app()
             return True
         focused = self.view.is_focus()
-        if event.keyval == Gdk.KEY_Delete and focused:
-            self.on_delete()
+        no_mod = not (event.state & (Gdk.ModifierType.CONTROL_MASK
+                                     | Gdk.ModifierType.SHIFT_MASK
+                                     | Gdk.ModifierType.MOD1_MASK))
+        if no_mod and key in (Gdk.KEY_Down, Gdk.KEY_KP_Down,
+                              Gdk.KEY_Up, Gdk.KEY_KP_Up):
+            return self._nav_key(key)
+        # 回车 = 双击。在搜索框里回车则复制第一条结果 —— 「搜完就粘」不用换手
+        if key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter):
+            if not (focused or self.entry.is_focus()):
+                return False
+            paths = self.selected_paths()
+            if not paths:
+                rows = self._file_rows()
+                if rows and self.entry.is_focus():
+                    self._select_rows(rows[:1])
+                    paths = self.selected_paths()
+            if not paths:
+                return False
+            self.copy_paths(paths)
             return True
-        # 焦点在列表上时接管 Ctrl+A / Ctrl+C（否则会落到搜索框或什么都不做）
         if focused and (event.state & Gdk.ModifierType.CONTROL_MASK):
             if event.keyval in (Gdk.KEY_a, Gdk.KEY_A):
                 self.view.get_selection().select_all()
@@ -1119,6 +1303,9 @@ class App(object):
             if event.keyval in (Gdk.KEY_c, Gdk.KEY_C):
                 self.on_copy_clicked()
                 return True
+        if event.keyval == Gdk.KEY_Delete and focused:
+            self.on_delete()
+            return True
         return False
 
     def set_status(self, text):

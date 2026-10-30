@@ -1,3 +1,29 @@
+wps-clip-bridge (1.8.0) unstable; urgency=medium
+
+  * 置顶：右键「置顶到最前」，常用的文档固定显示在列表最上方单独一组，
+    不再被新文件挤下去。置顶项也一起排到托盘菜单前面。文件暂时不在
+    （U 盘没插、目录被挪走）就先不显示，但不会从配置里丢掉。
+  * 键盘全流程：热键唤起后直接打字过滤，按 ↓ 落到列表第一项，↑↓ 移动，
+    Enter 复制（等价双击），搜索框里直接回车就是「复制第一条结果」。
+    以前列表里没有选中时按 ↑↓ 只搬光标不选中，看着像没反应。
+  * 托盘菜单直接列最近 5 个文档，点一下即复制，不必先开窗口。
+    用 dbusmenu 的 AboutToShow 在面板每次弹菜单前刷新，窗口一直不开也不会
+    停在旧列表上；重名文件补上所在文件夹名。
+  * Wayland 原生剪贴板兜底：装了 wl-clipboard 时，除了 X11 的
+    text/uri-list，再用 wl-copy 写一份到原生 Wayland 剪贴板，纯 Wayland
+    应用（GTK4 原生、Qt6 wayland）也能粘出文件。没装则静默跳过，
+    wps-copy --doctor 会提示该装什么。
+  * 自建 apt 源（GitHub Pages）：加一次源后 sudo apt upgrade 即可升级。
+    新增 tools/build-apt-repo.py 生成 Packages/Release（未签名，需
+    [trusted=yes]），发版 workflow 在 Release 建好后自动把同一个 deb
+    塞进 gh-pages 的 apt 源。源里保留所有历史版本，可以降级。
+  * 发版 workflow 手动重跑改为必填 tag 参数：workflow_dispatch 时
+    github.ref_name 是分支名，原来那套会拿分支名当 tag 用。
+  * 测试 193 -> 240：置顶（JSON 存储与容错）、托盘菜单动态项、
+    Wayland uri-list 格式与调用方式、apt 源的字段与哈希自洽。
+
+ -- shuai <shuai@localhost>  Fri, 30 Oct 2026 16:15:00 +0800
+
 wps-clip-bridge (1.7.3) unstable; urgency=medium
 
   * 加 GitHub Actions。之前 193 个用例只在本机跑过，PR 来了没法验证、

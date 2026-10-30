@@ -1,10 +1,11 @@
 Package: wps-clip-bridge
-Version: 1.7.3
+Version: 1.8.0
 Architecture: all
 Maintainer: shuai <shuai@localhost>
 Installed-Size: 240
 Depends: python3 (>= 3.6), python3-gi, gir1.2-gtk-3.0
 Recommends: python3-xlib, gir1.2-appindicator3-0.1 | gir1.2-ayatanaappindicator3-0.1, libnotify-bin
+Suggests: wl-clipboard
 Section: utils
 Priority: optional
 Description: 让 WPS 文档能复制粘贴到桌面和微信

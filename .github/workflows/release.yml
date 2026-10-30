@@ -1,17 +1,26 @@
 name: Release
 
-# 推一个 v 开头的 tag 就发版：构建 → 检查 → 生成说明 → 建 GitHub Release。
-# 这样「发版」这件事不依赖某台机器上装了什么，也不依赖我的终端是不是开着。
+# 推一个 v 开头的 tag 就发版：构建 → 检查 → 生成说明 → 建 GitHub Release
+# → 把新包塞进 apt 源。这样「发版」这件事不依赖某台机器上装了什么。
 on:
   push:
     tags: ['v*']
-  # 允许手动重跑（比如发布时网络抖动失败了），用当前分支的 HEAD 对应的 tag 再发一次
+  # 手动重跑：指定要重发的 tag（比如上一次发布时网络抖了）。
+  # 注意不能拿 github.ref_name —— 手动触发时它是分支名，不是 tag。
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 要重发的 tag（例如 v1.8.0）
+        required: true
 
 permissions:
-  # 建 Release、传附件、改说明都要写权限。默认的 contents: read 不够，
-  # 少了这一行会报 "Resource not accessible by integration"
+  # 建 Release、传附件、改说明、推 gh-pages 都要写权限。默认的
+  # contents: read 不够，少了这一行会报 "Resource not accessible by integration"
   contents: write
+
+env:
+  # tag 推送时就是 tag 名；手动触发时取 inputs.tag
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -21,6 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # 手动重跑时要检出那个 tag 对应的提交，而不是分支的当前 HEAD
+          ref: ${{ inputs.tag || github.ref_name }}
           # 生成说明要从 changelog 读历史，完整历史更稳妥
           fetch-depth: 0
 
@@ -28,7 +39,7 @@ jobs:
         # 最常见的发版事故：tag 写了 v1.7.3，debian/control 还是 1.7.2，
         # 发出去的包文件名、Release 标题、changelog 全对不上。
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${TAG#v}"
           VER=$(sed -n 's/^Version:[[:space:]]*//p' debian/control | head -1)
           TOP=$(sed -n '1s/.*(\([^)]*\)).*/\1/p' debian/changelog)
           echo "tag=$TAG control=$VER changelog=$TOP"
@@ -62,7 +73,7 @@ jobs:
 
       - name: 生成发布说明与校验和
         run: |
-          VER="${GITHUB_REF_NAME#v}"
+          VER="${TAG#v}"
           tools/changelog-notes.py "$VER" -o "dist/RELEASE-$VER.md" \
             --deb "wps-clip-bridge_${VER}_all.deb"
           (cd dist && sha256sum "wps-clip-bridge_${VER}_all.deb" > SHA256SUMS)
@@ -74,8 +85,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VER="${GITHUB_REF_NAME#v}"
-          TAG="$GITHUB_REF_NAME"
+          VER="${TAG#v}"
           DEB="dist/wps-clip-bridge_${VER}_all.deb"
           NOTES="dist/RELEASE-$VER.md"
 
@@ -98,3 +108,48 @@ jobs:
 
           gh release view "$TAG" --json url,assets \
             -q '"发布完成：" + .url, (.assets[] | "  附件: " + .name + "  " + (.size|tostring) + " 字节")'
+
+  apt:
+    name: 更新 apt 源
+    # 等 Release 建好再跑：deb 从 Release 附件里取，保证两边是同一个文件
+    needs: release
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 检出 gh-pages（apt 源就放在这个分支上）
+        uses: actions/checkout@v5
+        with:
+          ref: gh-pages
+          path: pages
+
+      - name: 取本版安装包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh release download "$TAG" --pattern '*.deb' --dir dist
+          ls -l dist
+
+      - name: 重新生成 Packages / Release
+        run: |
+          python3 tools/build-apt-repo.py pages dist/*.deb
+          echo "--- Packages 里的版本 ---"
+          grep -E '^(Package|Version|Filename):' \
+            pages/apt/dists/stable/main/binary-all/Packages
+
+      - name: 推送 gh-pages
+        working-directory: pages
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "apt 源没有变化（同一个包重发），跳过提交"
+            exit 0
+          fi
+          git add -A
+          git commit -m "apt: 加入 $TAG"
+          # checkout 出来的可能是游离 HEAD，显式指定推到 gh-pages 分支
+          git push origin HEAD:gh-pages
+          echo "站点：https://mzjw159.github.io/wps-clip-bridge/apt/"
+          echo "用户端：deb [trusted=yes] https://mzjw159.github.io/wps-clip-bridge/apt stable main"

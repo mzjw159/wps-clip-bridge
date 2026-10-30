@@ -37,6 +37,12 @@
 - **多选与拖拽**：`Ctrl` / `Shift` 多选后一次复制，也可以直接把行拖到微信窗口
 - **一个常驻服务**持剪贴板：窗口关了、关了应用，剪贴板里的文件还在
 - **按时间分组**（今天 / 昨天 / 近 3 天 …），带搜索、类型识别、文件大小
+- **置顶**：常用的那几个钉在列表最上方，不会被新文件挤下去
+- **键盘全流程**：`↑↓` 选、`Enter` 复制、`Ctrl+A` 全选、`Ctrl+C` 复制、
+  `Delete` 移入回收站 —— 热键唤起后手不用离开键盘
+- **托盘菜单直接列最近 5 个**：右键托盘图标就能复制刚才那个文件，不必先开窗口
+- **Wayland 兜底**：装了 `wl-clipboard` 时额外写一份到原生 Wayland 剪贴板，
+  纯 Wayland 应用（GTK4 / Qt6）也粘得出来
 - **设置可调**：换热键、主题（跟随系统/浅色/深色）、列表条数、关闭收托盘、
   复制后自动收起、开机自启
 - **托盘图标自绘**：单击唤回窗口，最小化到任务栏后也点得出来
@@ -44,7 +50,21 @@
 
 ## 安装
 
-### 从 Release 安装（推荐）
+### 加 apt 源（装一次，以后能 `apt upgrade`）
+
+```sh
+echo "deb [trusted=yes] https://mzjw159.github.io/wps-clip-bridge/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/wps-clip-bridge.list
+sudo apt update
+sudo apt install wps-clip-bridge
+```
+
+以后有新版本直接 `sudo apt upgrade`，不用再回来下载。
+
+> 这个是自建源、**没有 GPG 签名**，所以那一行必须带 `[trusted=yes]` —— 意思是
+> 你明确信任这一个源。介意的话用下面的方式手动装。
+
+### 从 Release 下载（不想加源时）
 
 到 [Releases](https://github.com/mzjw159/wps-clip-bridge/releases/latest) 下载
 `wps-clip-bridge_x.y.z_all.deb` 和 `SHA256SUMS`，任选一种装法：
@@ -118,13 +138,30 @@ wps-copy --gui
 
 窗口里有搜索、刷新、**「浏览本地文件…」**（支持多选，选列表里没有的文件）。
 
+**不用鼠标也能操作**：热键唤起后焦点在搜索框，直接打字过滤；按 `↓` 落到列表
+第一项，`↑↓` 走动，`Enter` 复制（等价于双击）。搜索框里直接按 `Enter` 就是
+「复制第一条结果」——「搜完就粘」不用换手。
+
+| 按键 | 作用 |
+|---|---|
+| `↑` `↓` | 在列表里移动（没选中时会自动选上第一/最后一项） |
+| `Enter` | 复制选中的文件（搜索框里按也行） |
+| `Ctrl` + `A` / `C` | 全选 / 复制 |
+| `Delete` | 移到回收站（会二次确认） |
+| `Esc` | 收进托盘（配了的话），否则退出 |
+
+**置顶**：右键某一项 →「置顶到最前」，它会固定显示在列表最上方单独一组，
+托盘菜单里也一起排前面。改主意了就再右键 →「取消置顶」。多选时可以对一批
+文件一起置顶。
+
 **一次发多个文件**：
 
 - 多选后按 `Ctrl+C`、双击任意一行，或点「复制 N 个文件」；
 - 或者直接把选中的行**拖到**微信聊天窗口、桌面、文件管理器 —— 落点应用收到的是
   标准 `text/uri-list`，省掉「复制 → 切窗口 → 粘贴」三步。
 
-分组标题（今天 / 昨天 / …）只是分隔，不参与选中，`Ctrl+A` 也不会把它们算进去。
+分组标题（置顶 / 今天 / 昨天 / …）只是分隔，不参与选中，`Ctrl+A` 也不会把它们
+算进去。
 
 复制在后台线程里做，点下去界面不会僵住：状态栏左边转进度圈，按钮暂时变成「正在
 复制…」，期间照样能搜索、改选。连点几次也只会显示最后一次的结果。
@@ -169,6 +206,7 @@ close_to_tray = true             ; 关闭时收进托盘
 hide_after_copy = true           ; 复制成功后自动收起窗口
 start_hidden = false             ; 启动时待在托盘
 notify_on_copy = true            ; 复制成功发通知
+pinned = ["/home/u/常用合同.docx"] ; 置顶的文档（界面里右键设置，一般不用手改）
 ```
 
 改完热键后，在设置窗口点一次保存，或 `wps-copy --stop && wps-copy --start`，让热键
@@ -225,7 +263,10 @@ rm -rf ~/.cache/ukui ~/.cache/icon-cache.kcache
   收不到按键。这是 X11 键盘抓取的固有限制。
 - **`Ctrl+Alt+C` 可能被其他程序占用**，抢不到会提示，换一个即可。
 - **只列本机存在文件。** 纯云端、本地无落盘文件的文档没有可复制的对象。
-- **Wayland 原生会话**下靠 XWayland 工作，剪贴板与热键能力取决于合成器。
+- **Wayland 原生应用的「粘贴」要装 `wl-clipboard`。** 程序会额外用 `wl-copy` 写一份
+  到原生 Wayland 剪贴板；没装 `wl-copy` 时只能靠 XWayland 桥接，纯 Wayland 应用
+  （GTK4 原生、Qt6 wayland）可能粘不出来。装一下即可：
+  `sudo apt install wl-clipboard`。`wps-copy --doctor` 会告诉你有没有。
 
 ## 兼容性
 
@@ -249,6 +290,7 @@ wps-clip-bridge/
 │   ├── core.py              路径、配置、日志、单实例锁、剪贴板读取
 │   ├── recent.py            最近文档：三层解析 + 兜底源 + 自检诊断
 │   ├── bridge.py            常驻剪贴板服务（selection 持有者）
+│   ├── wlclip.py            Wayland 剪贴板兜底（调用 wl-copy）
 │   ├── service.py           服务编排：确保在跑、异步复制、确认结果
 │   ├── gui.py               图形窗口
 │   ├── settings.py          设置窗口
@@ -259,7 +301,7 @@ wps-clip-bridge/
 │   └── _vendor/             内置的 python-xlib 与 six
 ├── bin/                     5 个可执行入口（薄壳）
 ├── data/                    菜单项、自启项、图标、man page、AppStream 元数据
-├── tools/                   render-icons.py、release.sh、check-deb.sh、changelog-notes.py
+├── tools/                   render-icons.py、release.sh、check-deb.sh、changelog-notes.py、build-apt-repo.py
 ├── tests/                   单元测试（不需要图形环境）
 ├── debian/                  control、维护脚本、copyright、changelog
 ├── .github/                 CI、tag 触发发版、Issue / PR 模板
@@ -282,11 +324,12 @@ python3 -m wpsclip.daemon        # 看护进程
 
 ### 测试
 
-193 个用例，不需要图形界面，也不碰你的真实配置（每个用例都在临时目录里跑）：
+240 个用例，不需要图形界面，也不碰你的真实配置（每个用例都在临时目录里跑）：
 
 ```sh
-python3 -m unittest discover -s tests        # 全跑，约 2 秒
+python3 -m unittest discover -s tests        # 全跑，约 7 秒
 python3 -m unittest tests.test_recent -v     # 只跑解析与多源兜底
+python3 -m unittest tests.test_apt_repo -v   # apt 源的 Packages/Release 自洽
 ./tools/check-deb.sh                         # 打出来的包内容对不对
 ```
 

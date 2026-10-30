@@ -23,7 +23,7 @@ import urllib.parse
 from Xlib import X, Xatom, display
 from Xlib.protocol import event as xev
 
-from . import core
+from . import core, wlclip
 
 POLL = core.conf_float('bridge', 'poll', 0.3)
 
@@ -159,6 +159,12 @@ class Bridge(object):
         self.is_owner = True
         self.d.flush()
         core.log('published %s %d path(s): %r' % (self.mode, len(paths), paths))
+        # X11 这边设置完了；纯 Wayland 应用读的是另一个协议，有 wl-copy
+        # 就再写一份（见 wlclip.py）。失败不影响 X11 这边的结果。
+        try:
+            wlclip.copy_files(paths, self.mode)
+        except Exception as ex:
+            core.log('Wayland 剪贴板兜底失败: %r' % (ex,))
         # 通知等待者（CLI 写完请求后轮询这个文件的 mtime）
         core.touch(core.runtime_file('published'))
 

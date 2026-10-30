@@ -121,6 +121,50 @@ class SaveTest(_TmpHome):
         self.assertEqual(core.conf('ui', 'theme', ''), 'dark')
 
 
+class PinnedTest(_TmpHome):
+    """置顶列表：JSON 存储、容错、切换顺序。"""
+
+    def test_empty_by_default(self):
+        self.assertEqual(core.pinned_paths(), [])
+
+    def test_roundtrip_keeps_order(self):
+        core.set_pinned(['/b.docx', '/a.docx'])
+        self.assertEqual(core.pinned_paths(), ['/b.docx', '/a.docx'])
+
+    def test_toggle_adds_to_front(self):
+        self.assertTrue(core.toggle_pin('/a.docx'))
+        self.assertTrue(core.toggle_pin('/b.docx'))
+        # 刚钉的那个排最前：它才是此刻最关心的
+        self.assertEqual(core.pinned_paths(), ['/b.docx', '/a.docx'])
+
+    def test_toggle_removes(self):
+        core.toggle_pin('/a.docx')
+        self.assertFalse(core.toggle_pin('/a.docx'))
+        self.assertEqual(core.pinned_paths(), [])
+
+    def test_is_pinned_normalizes_path(self):
+        core.set_pinned(['/tmp/x/../x/a.docx'])
+        self.assertTrue(core.is_pinned('/tmp/x/a.docx'))
+
+    def test_broken_json_falls_back_to_lines(self):
+        # 手改配置写成一行一个也要认，别让整个置顶列表因为格式不对就失效
+        core.save_conf({('ui', 'pinned'): '/a.docx\n/b.docx\n'})
+        self.assertEqual(core.pinned_paths(), ['/a.docx', '/b.docx'])
+
+    def test_garbage_ignored(self):
+        core.save_conf({('ui', 'pinned'): 'not json at all'})
+        self.assertEqual(core.pinned_paths(), [])
+
+    def test_relative_paths_dropped(self):
+        # 相对路径没法可靠还原（工作目录会变），直接扔掉
+        core.save_conf({('ui', 'pinned'): '["a.docx", "/b.docx"]'})
+        self.assertEqual(core.pinned_paths(), ['/b.docx'])
+
+    def test_duplicates_collapsed(self):
+        core.save_conf({('ui', 'pinned'): '["/a.docx", "/a.docx"]'})
+        self.assertEqual(core.pinned_paths(), ['/a.docx'])
+
+
 class AutostartTest(_TmpHome):
     def test_off_writes_hidden_override(self):
         self.assertFalse(core.autostart_enabled())

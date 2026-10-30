@@ -252,10 +252,12 @@ class SniItem(object):
     """
 
     def __init__(self, items, on_activate, on_secondary=None,
-                 title=ITEM_TITLE, icon_name='wps-file'):
+                 title=ITEM_TITLE, icon_name='wps-file', on_refresh=None):
         self._items = list(items)
         self.on_activate = on_activate
         self.on_secondary = on_secondary or on_activate
+        # 面板询问菜单（AboutToShow）时调用，返回是否要重新取布局
+        self.on_refresh = on_refresh
         self.title = title
         self.icon_name = icon_name
         self.available = False
@@ -268,9 +270,43 @@ class SniItem(object):
         # id -> (props, callback)
         self._nodes = {}
         self._root_children = []
+        self._sig = self._items_sig(self._items)
         self._build()
 
     # ------------------------------------------------------------ 菜单
+    @staticmethod
+    def _items_sig(items):
+        """只比文案：回调每次都是新函数的对象，拿来比较永远不等。"""
+        return tuple(it[0] if it else None for it in items)
+
+    def set_items(self, items):
+        """换一套菜单项（最近文档变了时用），并通知面板重画。
+
+        返回是否真的有变化 —— 没变就别发信号，免得面板白重排一次。
+        """
+        sig = self._items_sig(items)
+        if sig == self._sig:
+            return False
+        self._sig = sig
+        self._items = list(items)
+        self._nodes = {}
+        self._root_children = []
+        self._build()
+        self._revision = (self._revision or 1) + 1
+        self._emit_layout()
+        return True
+
+    def _emit_layout(self):
+        conn = self._conn
+        if conn is None:
+            return
+        try:
+            conn.emit_signal(None, MENU_PATH, 'com.canonical.dbusmenu',
+                             'LayoutUpdated',
+                             GLib.Variant('(ui)', (self._revision, 0)))
+        except Exception as ex:
+            core.log('SNI：发送 LayoutUpdated 失败: %r' % (ex,))
+
     def _build(self):
         iid = 1
         for item in self._items:
@@ -502,9 +538,25 @@ class SniItem(object):
                         self._click(int(iid))
                 invocation.return_value(GLib.Variant('(ai)', ([],)))
             elif method == 'AboutToShow':
-                invocation.return_value(GLib.Variant('(b)', (False,)))
+                # 面板每次要弹菜单前都会问一句。这里顺手把「最近文档」刷新掉，
+                # 返回 True 就是告诉面板「内容可能变了，重新取一次布局」。
+                changed = False
+                if self.on_refresh is not None:
+                    try:
+                        changed = bool(self.on_refresh())
+                    except Exception as ex:
+                        core.log('SNI：刷新菜单失败: %r' % (ex,))
+                invocation.return_value(GLib.Variant('(b)', (changed,)))
             elif method == 'AboutToShowGroup':
-                invocation.return_value(GLib.Variant('(aiai)', ([], [])))
+                ids = params.unpack()[0]
+                needs = []
+                if any(int(i) == 0 for i in ids) and self.on_refresh is not None:
+                    try:
+                        if self.on_refresh():
+                            needs = [0]
+                    except Exception as ex:
+                        core.log('SNI：刷新菜单失败: %r' % (ex,))
+                invocation.return_value(GLib.Variant('(aiai)', (needs, [])))
             else:
                 invocation.return_dbus_error(
                     'org.freedesktop.DBus.Error.UnknownMethod', method)

@@ -215,6 +215,108 @@ class SniMethodsTest(unittest.TestCase):
 
 
 @_need_gi
+class TrayRecentMenuTest(unittest.TestCase):
+    """托盘菜单里的「最近 5 个」：位置、点击、刷新时机。"""
+
+    def _tray(self, recent=(), copied=None):
+        copied = copied if copied is not None else []
+        t = tray.Tray(on_show=lambda: None,
+                      on_copy=lambda: None,
+                      on_settings=lambda: None,
+                      on_quit=lambda: None,
+                      on_copy_path=lambda p: copied.append(p),
+                      on_recent=lambda: list(recent))
+        return t, copied
+
+    def test_recent_items_go_right_after_show(self):
+        t, _ = self._tray([('a.docx', '/a.docx'), ('b.docx', '/b.docx')])
+        labels = [s[0] if s else None for s in t._menu_spec()]
+        self.assertEqual(labels, ['显示窗口', None, 'a.docx', 'b.docx', None,
+                                  '复制最近文档', None, '设置…', None, '退出'])
+
+    def test_no_recent_keeps_old_layout(self):
+        t, _ = self._tray([])
+        labels = [s[0] if s else None for s in t._menu_spec()]
+        self.assertEqual(labels, ['显示窗口', '复制最近文档', None,
+                                  '设置…', None, '退出'])
+
+    def test_click_copies_that_file(self):
+        t, copied = self._tray([('a.docx', '/a.docx'), ('b.docx', '/b.docx')])
+        spec = t._menu_spec()
+        # 第 3 项是 b.docx（0=显示窗口 1=分隔 2=a 3=b）
+        spec[3][1]()
+        self.assertEqual(copied, ['/b.docx'])
+
+    def test_broken_provider_does_not_break_menu(self):
+        t = tray.Tray(on_show=lambda: None, on_copy=lambda: None,
+                      on_settings=lambda: None, on_quit=lambda: None,
+                      on_recent=lambda: 1 / 0)
+        labels = [s[0] if s else None for s in t._menu_spec()]
+        self.assertEqual(labels[0], '显示窗口')
+        self.assertIn('复制最近文档', labels)
+
+    def test_refresh_is_idempotent(self):
+        t, _ = self._tray([('a.docx', '/a.docx')])
+        t._build_menu = lambda: None
+        t._status_icon = object()          # 走 StatusIcon 分支，不碰真控件
+        self.assertTrue(t.refresh_menu())   # 第一次：算变化（还没发过）
+        self.assertFalse(t.refresh_menu())  # 内容一样：不该再重建
+        self.assertTrue(t.refresh_menu() is False)
+
+    def test_refresh_detects_change(self):
+        recent = [('a.docx', '/a.docx')]
+        t, _ = self._tray(recent)
+        t._build_menu = lambda: None
+        t._status_icon = object()
+        t.refresh_menu()
+        recent.append(('b.docx', '/b.docx'))
+        self.assertTrue(t.refresh_menu())
+
+
+@_need_gi
+class SniSetItemsTest(unittest.TestCase):
+    """菜单热更新：面板开着的时候「最近文档」也得跟着变。"""
+
+    def _item(self, on_refresh=None):
+        return sni.SniItem(
+            [('显示窗口', lambda: None), None, ('退出', lambda: None)],
+            on_activate=lambda: None, on_refresh=on_refresh)
+
+    def test_set_items_rebuilds_nodes(self):
+        item = self._item()
+        with mock.patch.object(item, '_emit_layout') as emit:
+            self.assertTrue(item.set_items(
+                [('显示窗口', lambda: None), None,
+                 ('a.docx', lambda: None), ('b.docx', lambda: None)]))
+            emit.assert_called_once()
+        self.assertEqual(len(item._root_children), 4)
+        self.assertEqual(item._props_of(3)['label'], 'a.docx')
+        self.assertEqual(item._revision, 2)
+
+    def test_same_labels_no_signal(self):
+        item = self._item()
+        with mock.patch.object(item, '_emit_layout') as emit:
+            self.assertFalse(item.set_items(
+                [('显示窗口', lambda: None), None, ('退出', lambda: None)]))
+            emit.assert_not_called()
+
+    def test_about_to_show_triggers_refresh(self):
+        seen = []
+        item = self._item(on_refresh=lambda: seen.append(1) or True)
+        inv = _FakeInvocation()
+        # AboutToShow 的返回值必须是 (b)，面板据此决定要不要重取布局
+        item._on_menu_call(None, None, None, None, 'AboutToShow',
+                           mock.Mock(unpack=lambda: (0, True)), inv)
+        self.assertEqual(seen, [1])
+        self.assertIsNotNone(inv.value)
+
+    def test_emit_layout_survives_no_connection(self):
+        item = self._item()
+        item._conn = None
+        item._emit_layout()          # 没连上总线时不能抛
+
+
+@_need_gi
 class TrayBackendTest(unittest.TestCase):
     def _tray(self):
         return tray.Tray(on_show=lambda: None, on_copy=lambda: None,

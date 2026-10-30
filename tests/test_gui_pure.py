@@ -157,6 +157,44 @@ class HumanSizeTest(unittest.TestCase):
 
 
 
+@_need_gi
+class TrayRecentTest(unittest.TestCase):
+    """托盘菜单里的「最近 5 个」：顺序、去重、重名区分。
+
+    菜单项错一位，用户点下去复制到的就是另一个文件，而且界面上看不出来。
+    """
+
+    def _entries(self, pinned, paths, limit=5):
+        # 全都当成存在的文件，避免依赖真实磁盘
+        return gui.tray_recent_entries(pinned, paths, limit, lambda p: True)
+
+    def test_pinned_first(self):
+        out = self._entries(['/p.docx'], ['/a.docx', '/b.docx'])
+        self.assertEqual([p for _, p in out], ['/p.docx', '/a.docx', '/b.docx'])
+
+    def test_pinned_not_duplicated(self):
+        out = self._entries(['/a.docx'], ['/a.docx', '/b.docx'])
+        self.assertEqual([p for _, p in out], ['/a.docx', '/b.docx'])
+
+    def test_limit(self):
+        paths = ['/%d.docx' % i for i in range(10)]
+        self.assertEqual(len(self._entries([], paths)), 5)
+        self.assertEqual(len(self._entries([], paths, limit=2)), 2)
+
+    def test_missing_files_skipped(self):
+        out = gui.tray_recent_entries([], ['/a.docx'], 5, lambda p: False)
+        self.assertEqual(out, [])
+
+    def test_duplicate_names_get_folder(self):
+        # 两个「合同.docx」：不补目录的话菜单里两行一模一样
+        out = self._entries([], ['/x/合同.docx', '/y/合同.docx'])
+        self.assertEqual([l for l, _ in out], ['合同.docx', '合同.docx（y）'])
+
+    def test_label_is_basename(self):
+        out = self._entries([], ['/home/u/季度报告.docx'])
+        self.assertEqual(out[0][0], '季度报告.docx')
+
+
 class ClampWindowPosTest(unittest.TestCase):
     """记住的窗口坐标要能安全还原：换屏、改分辨率后不能跑到屏幕外。"""
 

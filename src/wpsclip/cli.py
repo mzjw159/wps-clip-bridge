@@ -20,7 +20,7 @@ import os
 import subprocess
 import sys
 
-from . import core, recent, service
+from . import core, recent, service, wlclip
 
 
 def usage(code=0):
@@ -181,7 +181,8 @@ def cmd_doctor(_args):
     print('会话：XDG_SESSION_TYPE=%s  DISPLAY=%s' % (sess, disp))
     if sess == 'wayland':
         mark('warn', '当前是 Wayland 会话：程序通过 XWayland 工作，X11 全局热键只在'
-                     'XWayland 应用有焦点时才收得到；热键不灵时用托盘菜单或命令行。')
+                     'XWayland 应用有焦点时才收得到；热键不灵时用托盘菜单或命令行。'
+                     '复制到纯 Wayland 应用要靠 wl-copy（见下面的依赖检查）。')
     if not os.environ.get('DISPLAY'):
         mark('bad', '没有 DISPLAY —— 剪贴板服务需要 X11（XWayland 也算）。')
 
@@ -205,11 +206,16 @@ def cmd_doctor(_args):
             print('  ✘ %-8s 缺少 %s' % (mod, hint))
             mark('bad', '缺少 Python 模块 %s（%s）' % (mod, hint))
     for exe, hint in (('notify-send', 'libnotify-bin（通知，可选）'),
+                      ('wl-copy', 'wl-clipboard（Wayland 会话里复制文件到纯 Wayland '
+                                  '应用需要它，X11 下用不到）'),
                       ('import', 'imagemagick（只在截图调试时用，可不装）')):
         found = any(os.access(os.path.join(p, exe), os.X_OK)
                     for p in os.environ.get('PATH', '').split(':'))
         print('  %s %-12s %s' % ('✔' if found else '·', exe,
                                  '已安装' if found else '未安装（' + hint + '）'))
+    if sess == 'wayland' and not wlclip.available():
+        mark('bad', 'Wayland 会话但没有 wl-copy：复制到纯 Wayland 应用（GTK4 原生、'
+                    'Qt6 wayland）可能粘不出文件。安装：sudo apt install wl-clipboard')
 
     print('\n数据源：')
     info = rn.diagnose()

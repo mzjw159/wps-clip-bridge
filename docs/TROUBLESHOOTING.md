@@ -28,6 +28,29 @@ tail -n 40 ~/.local/state/wps-clip-bridge/bridge.log
 先确认：**复制之后有没有再碰过 WPS 的「复制」按钮**。那个按钮是空操作，一点就把
 剪贴板清空，覆盖掉刚放进的文件。
 
+## Wayland 应用里粘不出文件（GTK4 / Qt6 程序）
+
+X11 的剪贴板和 Wayland 的剪贴板是两套东西，中间由 XWayland 桥接。桥接对
+`text/uri-list`（"这是一批文件"）并不可靠 —— 于是在 GTK4 原生、Qt6 wayland
+这类程序里按 `Ctrl+V` 什么都不出来。
+
+装 `wl-clipboard` 就好：
+
+```sh
+sudo apt install wl-clipboard
+wps-copy --doctor | grep wl-copy     # 应该显示 ✔ 已安装
+```
+
+装好之后每次复制会额外用 `wl-copy` 写一份到原生 Wayland 剪贴板，X11 那边照旧。
+`wl-copy` 自己不报错但也没生效的话，看日志：
+
+```sh
+tail -20 ~/.local/state/wps-clip-bridge/wl-copy.log
+```
+
+最常见的是合成器不支持 `wlr-data-control`（少数平铺窗管），那种情况下只能退回去
+用 XWayland 程序粘贴。
+
 ## 列表是空的
 
 ```sh

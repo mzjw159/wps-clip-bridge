@@ -45,7 +45,9 @@ tag 推上去后 `.github/workflows/release.yml` 依次做：
 2. 跑一遍全部单元测试（tag 可能打在没走过 CI 的提交上，这是最后一道闸）；
 3. `./build.sh` → `./tools/check-deb.sh`；
 4. 用 `tools/changelog-notes.py` 从 changelog 生成发布说明，算 `SHA256SUMS`；
-5. `gh release create`，带上 `.deb`、`SHA256SUMS` 和说明。
+5. `gh release create`，带上 `.deb`、`SHA256SUMS` 和说明；
+6. 另起一个 job 把同一个 deb 塞进 `gh-pages` 上的 apt 源，用户 `apt upgrade` 就能
+   拿到（见下面「apt 源」一节）。
 
 Release 已存在时走「更新说明 + 覆盖附件」，所以同一个 tag 重推、或手动
 `workflow_dispatch` 重跑都不会报错。
@@ -102,6 +104,81 @@ install -m 755 gh_2.103.3_linux_arm64/bin/gh ~/.local/bin/gh
 
 第 4 步是独立的：`git push --tags` 只推 tag 这个引用，**Release 是 GitHub 上另一个
 对象**（带说明和附件），只能用网页或 GitHub API 建，`git push` 变不出来。
+
+## apt 源（GitHub Pages）
+
+用户加一次源，以后 `sudo apt upgrade` 就能升级，不用每次来 Release 页下载。
+源托管在同一个仓库的 `gh-pages` 分支上，由 GitHub Pages 发布。
+
+### 结构
+
+```
+gh-pages 分支根目录
+├── index.html                          跳转到 apt/
+├── .nojekyll                           别让 Pages 走 Jekyll
+└── apt/
+    ├── index.html                      给用户看的说明（含加源命令）
+    ├── pool/main/w/wps-clip-bridge/    所有历史 deb，一个都不删（可降级）
+    └── dists/stable/
+        ├── Release                     Packages 的大小与 MD5/SHA256
+        └── main/binary-all/Packages{,.gz}
+```
+
+访问地址：<https://mzjw159.github.io/wps-clip-bridge/apt/>
+
+### 加包 / 重新生成
+
+```sh
+tools/build-apt-repo.py <站点根目录> dist/wps-clip-bridge_1.8.0_all.deb
+```
+
+它会把 deb 拷进 `pool/`，然后**全量重扫 pool** 重新生成 `Packages`、`Packages.gz`
+和 `Release`。所以：
+
+- 新版本追加进去，老版本自动保留；
+- 想撤掉某个版本，从 `pool/` 里删掉文件再跑一次（不给参数也行，它只看目录）；
+- `Packages.gz` 用 `mtime=0` 压的，内容没变时字节完全一样，不会产生无意义的提交。
+
+日常发版不用手动跑：`.github/workflows/release.yml` 里的 `apt` job 会在 Release
+建好之后自动下载那个 deb、更新 gh-pages 并推送。
+
+### Pages 设置（只需一次）
+
+Settings → Pages → Source 选 `Deploy from a branch`，分支 `gh-pages`、目录 `/`。
+仓库里已经配好了，改分支名的话记得同步这里。
+
+也可以用 API 查：
+
+```sh
+gh api repos/mzjw159/wps-clip-bridge/pages | jq .source
+```
+
+### 为什么不签名
+
+签名要维护一把长期 GPG 密钥，密钥丢了或泄了比不签更麻烦，密钥轮换还得让所有
+用户重新导入。所以这里是**未签名源**，用户那一行必须带 `[trusted=yes]`：
+
+```
+deb [trusted=yes] https://mzjw159.github.io/wps-clip-bridge/apt stable main
+```
+
+别在文档里省掉 `[trusted=yes]` —— 省掉了 `apt update` 会直接报
+`NO_PUBKEY`，用户会以为源坏了。
+
+### 排错
+
+| 现象 | 原因 |
+|---|---|
+| `apt update` 报 `Hash Sum mismatch` | `Release` 与 `Packages` 不是同一次生成的，重跑一次脚本 |
+| `apt update` 报 `404` | gh-pages 还没推上去，或 Pages 构建还没完成（看 Actions 的 pages build） |
+| `E: 找不到软件包` | `dists/stable/...` 路径或组件名（`main`）与 sources.list 里不一致 |
+| 装了旧版 | 同一个包在 pool 里有多份时，apt 取版本号最大的；确认新 deb 真的进了 pool |
+
+自查（不装包就能确认仓库自洽）：
+
+```sh
+python3 -m unittest tests.test_apt_repo      # 结构、字段、哈希、字节稳定性
+```
 
 ## 换图标
 

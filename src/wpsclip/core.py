@@ -7,12 +7,13 @@
 """
 import configparser
 import fcntl
+import json
 import os
 import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.7.3'
+VERSION = '1.8.0'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {
@@ -49,6 +50,9 @@ DEFAULTS = {
         'window_y': '-1',
         'window_w': '0',
         'window_h': '0',
+        # 置顶的文档，JSON 数组。最近文档天然按修改时间排，常用的那几个
+        # 一旦不碰就会往下沉，置顶把它们钉在最前面。
+        'pinned': '[]',
     },
 }
 
@@ -191,6 +195,54 @@ def save_conf(updates):
     _config = None
     _config_mtime = None
     return path
+
+
+# ---------------------------------------------------------------- 置顶
+#
+# 存成 JSON 数组而不是「每行一个路径」：ConfigParser 写多行值会加续行缩进，
+# 路径里真出现换行/前导空格时读回来就变样了。JSON 一行搞定，没有歧义。
+
+def pinned_paths():
+    """置顶的文档路径（已规范化，顺序即显示顺序）。"""
+    raw = conf('ui', 'pinned', '').strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except Exception:
+        # 手改配置改成一行一个也能认，别让整个列表因为格式不对就失效
+        data = [l for l in raw.splitlines() if l.strip()]
+    out = []
+    for p in data:
+        if isinstance(p, str) and p.startswith('/'):
+            ap = os.path.abspath(p)
+            if ap not in out:
+                out.append(ap)
+    return out
+
+
+def set_pinned(paths):
+    save_conf({('ui', 'pinned'): json.dumps(list(paths), ensure_ascii=False)})
+
+
+def is_pinned(path):
+    return os.path.abspath(path) in pinned_paths()
+
+
+def toggle_pin(path):
+    """切换某个文件的置顶状态，返回切换后是否置顶。
+
+    新置顶的放最前面 —— 刚钉的那一个就是当前最关心的，排在最上面才顺手。
+    """
+    ap = os.path.abspath(path)
+    cur = pinned_paths()
+    if ap in cur:
+        cur.remove(ap)
+        set_pinned(cur)
+        return False
+    cur.insert(0, ap)
+    set_pinned(cur)
+    return True
 
 
 # ---------------------------------------------------------------- 开机自启

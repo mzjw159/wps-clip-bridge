@@ -47,11 +47,16 @@ def _icon_arg():
 
 
 class Tray(object):
-    def __init__(self, on_show, on_copy, on_settings, on_quit):
+    def __init__(self, on_show, on_copy, on_settings, on_quit,
+                 on_copy_path=None, on_recent=None):
         self.on_show = on_show
         self.on_copy = on_copy
         self.on_settings = on_settings
         self.on_quit = on_quit
+        # 「最近文档」那几行：点一下直接复制对应文件
+        self.on_copy_path = on_copy_path
+        # 返回 [(短标签, 路径), ...]；每次弹出菜单都会问一次
+        self.on_recent = on_recent
         self.backend = None
         self._sni = None
         self._indicator = None
@@ -59,18 +64,46 @@ class Tray(object):
         self._status_icon = None
         self._menu = None
         self._show_item = None
+        self._sig = None            # 上次菜单内容的签名，用来判断「真的变了没」
 
     # ------------------------------------------------------------ 构建
+    def _copy_path(self, path):
+        cb = self.on_copy_path
+        if cb is None:
+            self.on_copy()
+            return
+        try:
+            cb(path)
+        except Exception as ex:
+            core.log('从托盘复制失败 %s: %r' % (path, ex))
+
     def _menu_spec(self):
-        """菜单内容：Gtk 菜单和 dbusmenu 共用一份定义，改文案只改这里。"""
-        return [
-            ('显示窗口', self.on_show),
-            ('复制最近文档', self.on_copy),
-            None,
-            ('设置…', self.on_settings),
-            None,
-            ('退出', self.on_quit),
-        ]
+        """菜单内容：Gtk 菜单和 dbusmenu 共用一份定义，改文案只改这里。
+
+        最近文档直接列出前几条 —— 托盘最常见的用法就是「复制刚才那个文件」，
+        让用户先点开窗口再找一遍纯属多余。
+        """
+        items = [('显示窗口', self.on_show)]
+        recent = []
+        if self.on_recent is not None:
+            try:
+                recent = list(self.on_recent() or [])
+            except Exception as ex:
+                core.log('读取托盘菜单的最近文档失败: %r' % (ex,))
+        if recent:
+            items.append(None)
+            for label, path in recent:
+                items.append((label, lambda p=path: self._copy_path(p)))
+            items.append(None)
+            items.append(('复制最近文档', self.on_copy))
+        else:
+            items.append(('复制最近文档', self.on_copy))
+        items += [None, ('设置…', self.on_settings), None, ('退出', self.on_quit)]
+        return items
+
+    def _spec_sig(self, spec):
+        """菜单签名：只比文案，不比回调（回调每次都是新函数的对象）。"""
+        return tuple(e[0] if e else None for e in spec)
 
     def _build_menu(self):
         menu = Gtk.Menu()
@@ -88,6 +121,40 @@ class Tray(object):
         menu.show_all()
         self._menu = menu
         return menu
+
+    def refresh_menu(self):
+        """重建菜单内容，返回是否真的有变化。
+
+        由界面在列表刷新后调用；SNI 那边还会在面板询问菜单（AboutToShow）
+        时再问一次，所以即使用户一直不开窗口，菜单里的最近文档也不会太旧。
+        """
+        spec = self._menu_spec()
+        sig = self._spec_sig(spec)
+        if sig == self._sig:
+            return False
+        self._sig = sig
+        try:
+            if self._sni is not None:
+                self._sni.set_items(spec)
+            elif self._indicator is not None:
+                self._indicator.set_menu(self._build_menu())
+                self._wire_secondary(self._indicator)
+            elif self._status_icon is not None:
+                self._build_menu()          # _on_popup 下一次就用新的
+        except Exception as ex:
+            core.log('刷新托盘菜单失败: %r' % (ex,))
+            return False
+        return True
+
+    def _wire_secondary(self, ind):
+        """让中键（部分面板是双击）走「显示窗口」而不是弹菜单。"""
+        item = getattr(self, '_show_item', None)
+        if item is None or not hasattr(ind, 'set_secondary_activate_target'):
+            return
+        try:
+            ind.set_secondary_activate_target(item)
+        except Exception as ex:
+            core.log('设置次级激活目标失败: %r' % (ex,))
 
     def start(self):
         want = core.conf('ui', 'tray_backend', 'auto').strip().lower()
@@ -114,8 +181,13 @@ class Tray(object):
         except Exception as ex:
             core.log('SNI 模块不可用: %r' % (ex,))
             return False
-        item = SniItem(self._menu_spec(), on_activate=self.on_show,
-                       on_secondary=self.on_show)
+        spec = self._menu_spec()
+        self._sig = self._spec_sig(spec)
+        item = SniItem(spec, on_activate=self.on_show,
+                       on_secondary=self.on_show,
+                       # 面板每次问菜单前再刷一遍：窗口一直不开时，
+                       # 最近文档也不会停在很久以前那份列表上
+                       on_refresh=self.refresh_menu)
         if not item.start():
             return False
         self._sni = item
@@ -159,12 +231,7 @@ class Tray(object):
             # 弹菜单（这是面板决定的，程序改不了）。协议里唯一能表达「点一下
             # 图标但不要菜单」的是 secondary activate —— 中键一定生效，部分
             # 面板也把双击转发给它。
-            item = getattr(self, '_show_item', None)
-            if item is not None and hasattr(ind, 'set_secondary_activate_target'):
-                try:
-                    ind.set_secondary_activate_target(item)
-                except Exception as ex:
-                    core.log('设置次级激活目标失败: %r' % (ex,))
+            self._wire_secondary(ind)
 
             self._indicator = ind
             self._ai = AppIndicator
@@ -199,6 +266,11 @@ class Tray(object):
             return False
 
     def _on_popup(self, icon, button, activate_time):
+        # 弹出前重建一次：Gtk.StatusIcon 这条路没有 AboutToShow 可用
+        try:
+            self.refresh_menu()
+        except Exception:
+            pass
         menu = self._menu or self._build_menu()
         menu.popup(None, None, Gtk.StatusIcon.position_menu, icon,
                    button, activate_time)
