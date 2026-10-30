@@ -40,6 +40,13 @@ done
 
 die() { echo "发版中止：$*" >&2; exit 1; }
 
+# gh 经常装在 ~/.local/bin，某些非登录 shell（cron、IDE 内嵌终端）拿不到这个路径，
+# 所以自己找一遍，不依赖 PATH
+GH=$(command -v gh 2>/dev/null || true)
+if [ -z "$GH" ] && [ -x "${HOME:-/root}/.local/bin/gh" ]; then
+    GH="$HOME/.local/bin/gh"
+fi
+
 VERSION=$(sed -n 's/^Version:[[:space:]]*//p' "$DEB/control" | head -1)
 [ -n "$VERSION" ] || die "debian/control 里没读到 Version"
 TAG="v$VERSION"
@@ -66,9 +73,9 @@ CHANGELOG_TOP=$(sed -n '1s/.*(\([^)]*\)).*/\1/p' "$DEB/changelog")
     die "debian/changelog 顶部是 $CHANGELOG_TOP，和 control 里的 $VERSION 不一致"
 
 if [ "$DRY" -eq 0 ]; then
-    command -v gh >/dev/null 2>&1 || die "没装 gh（见 README「发版」一节）"
-    gh auth status >/dev/null 2>&1 || die "gh 还没登录，先跑：gh auth login"
-    REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || \
+    [ -n "$GH" ] || die "没装 gh（见 README「发版」一节）"
+    "$GH" auth status >/dev/null 2>&1 || die "gh 还没登录，先跑：$GH auth login"
+    REPO=$("$GH" repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || \
         die "认不出这个仓库，检查 git remote 是否指向 GitHub"
     echo "    仓库：$REPO"
 fi
@@ -138,13 +145,13 @@ fi
 ARGS=""
 [ "$DRAFT" -eq 1 ] && ARGS="--draft"
 
-if gh release view "$TAG" >/dev/null 2>&1; then
+if "$GH" release view "$TAG" >/dev/null 2>&1; then
     echo "==> Release $TAG 已存在，更新说明与附件"
-    gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES"
-    gh release upload "$TAG" "$OUT/$DEBNAME" "$OUT/SHA256SUMS" --clobber
+    "$GH" release edit "$TAG" --title "$TITLE" --notes-file "$NOTES"
+    "$GH" release upload "$TAG" "$OUT/$DEBNAME" "$OUT/SHA256SUMS" --clobber
 else
     echo "==> 创建 Release $TAG"
-    gh release create "$TAG" \
+    "$GH" release create "$TAG" \
         --title "$TITLE" \
         --notes-file "$NOTES" \
         $ARGS \
@@ -152,4 +159,4 @@ else
 fi
 
 echo ""
-gh release view "$TAG" --json url,isDraft -q '"完成：" + .url + (if .isDraft then "（草稿，需到网页点 Publish）" else "" end)'
+"$GH" release view "$TAG" --json url,isDraft -q '"完成：" + .url + (if .isDraft then "（草稿，需到网页点 Publish）" else "" end)'

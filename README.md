@@ -356,7 +356,17 @@ gh auth status       # 确认已登录
 ```
 
 `gh` 是单个静态二进制（arm64 版解压即用，不依赖 glibc 版本），放在
-`~/.local/bin/gh` 即可，不需要 sudo 装包。
+`~/.local/bin/gh` 即可，不需要 sudo 装包：
+
+```sh
+curl -L -o gh.tar.gz https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_arm64.tar.gz
+tar xzf gh.tar.gz --no-same-owner --no-same-permissions gh_2.103.3_linux_arm64/bin/gh
+install -m 755 gh_2.103.3_linux_arm64/bin/gh ~/.local/bin/gh
+```
+
+`release.sh` 会自己找 `gh`（PATH 里没有 `~/.local/bin` 也能找到）。
+`gh auth login` 若卡在 `Bad Gateway`，是代理的问题不是授权失败 —— 换一个能通
+`github.com` 的代理重试即可（`api.github.com` 通不代表登录能成）。
 
 **手工四步**（没有 gh、或想逐步确认时）：
 
