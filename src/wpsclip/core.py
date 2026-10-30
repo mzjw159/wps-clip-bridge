@@ -13,7 +13,7 @@ import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.9.0'
+VERSION = '1.10.0'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {
@@ -53,6 +53,10 @@ DEFAULTS = {
         # 置顶的文档，JSON 数组。最近文档天然按修改时间排，常用的那几个
         # 一旦不碰就会往下沉，置顶把它们钉在最前面。
         'pinned': '[]',
+        # 上次用的类型/来源筛选（空串 = 全部）。老是为同一份表格反复设筛选
+        # 很烦，所以记住；界面上有 × 可以一键还原。
+        'filter_type': '',
+        'filter_source': '',
     },
 }
 

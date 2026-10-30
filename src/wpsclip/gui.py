@@ -56,7 +56,8 @@ GRIP = 5
 ICCCM_ICONIC = 3
 
 # TreeStore 列索引
-C_ISGROUP, C_ICON, C_NAME, C_SOURCE, C_TYPE, C_SIZE, C_DIR, C_WHEN, C_PATH, C_MTIME = range(10)
+# 列索引。C_BYTES 是给排序用的原始字节数 —— 「4.0 KB」是给人看的，比不了大小。
+C_ISGROUP, C_ICON, C_NAME, C_SOURCE, C_TYPE, C_SIZE, C_DIR, C_WHEN, C_PATH, C_MTIME, C_BYTES = range(11)
 
 # 分组顺序
 _BUCKETS = ('今天', '昨天', '近 3 天', '近 7 天', '近 30 天', '更早')
@@ -110,26 +111,24 @@ def highlight_markup(text, kw, tag_start='<span background="#ffe066" foreground=
     让用户自己找是哪几个字，等于没筛。高亮用底色 + 深色字：深色主题下
     只改前景色会和背景糊在一起，底色 + 固定深色字两种主题都读得清。
 
-    大小写不敏感（和搜索一致）。少数语言里 lower() 会改变长度（如 'İ'），
-    那时索引对不上，宁可不加高亮也不要把字标错。
+    kw 可以含空格（多个词）：``hit_spans`` 会把每个词各自命中、重叠处合并，
+    「季度 报告」两个词都亮，而不是只亮整串。
+
+    先转义再包标签：文件名里带 ``<b>`` 时若不转义，整行 markup 解析失败，
+    文字会整段消失（GTK 不会报错，只是不画）。
     """
     if not text:
         return ''
-    if not kw:
-        return GLib.markup_escape_text(text)
-    low, k = text.lower(), kw.lower()
-    if len(low) != len(text) or not k:
+    # 分词后若一个词都没有（空串、纯空格），按无关键词处理
+    spans = recent.hit_spans(text, recent.split_terms(kw))
+    if not spans:
         return GLib.markup_escape_text(text)
     out, i = [], 0
-    while True:
-        hit = low.find(k, i)
-        if hit < 0:
-            out.append(GLib.markup_escape_text(text[i:]))
-            break
-        out.append(GLib.markup_escape_text(text[i:hit]))
-        out.append(tag_start + GLib.markup_escape_text(text[hit:hit + len(k)])
-                   + '</span>')
-        i = hit + len(k)
+    for start, end in spans:
+        out.append(GLib.markup_escape_text(text[i:start]))
+        out.append(tag_start + GLib.markup_escape_text(text[start:end]) + '</span>')
+        i = end
+    out.append(GLib.markup_escape_text(text[i:]))
     return ''.join(out)
 
 
@@ -140,6 +139,18 @@ def match_filter(path, type_sel='', src_sel=''):
     if src_sel and source_of(path) != src_sel:
         return False
     return True
+
+
+def choice_index(choices, value):
+    """下拉框里 value 对应的序号；第 0 项固定是「全部」，所以命中要 +1。
+
+    配置里存的是中文取值（'表格'），版本升级后这个取值可能已经不在了 ——
+    那时退回 0（全部），而不是让界面停在一个根本不存在的选项上。
+    """
+    try:
+        return list(choices).index(value) + 1
+    except (ValueError, TypeError):
+        return 0
 
 
 def type_icon(path):
@@ -369,25 +380,38 @@ class App(object):
         toolbar.pack_start(self.entry, True, True, 0)
 
         # 筛选：类型 / 来源两个下拉，可以叠加（「表格」+「微信」就是微信来的表格）。
-        # 不做成设置项、也不持久化 —— 打开窗口默认看到全部才符合直觉，
-        # 筛完关掉再打开应该还原，而不是让人以为文件丢了。
+        # 选择会记进配置 —— 老是为同一份表格反复设筛选很烦。但「记住」也意味着
+        # 下次打开看不到全部文件，所以过滤生效时工具栏上多一个「清除筛选」的 ×，
+        # 状态栏和空列表提示也都会写明当前筛选，不至于让人以为文件丢了。
+        self._quiet = False        # 程序改下拉时不触发保存/重载
         self.type_combo = Gtk.ComboBoxText()
         self.type_combo.append_text('全部类型')
         for _t in recent.TYPE_CHOICES:
             self.type_combo.append_text(_t)
-        self.type_combo.set_active(0)          # 先定好初值再接信号，否则构造期就 reload
+        self.type_combo.set_active(choice_index(recent.TYPE_CHOICES,
+                                                core.conf('ui', 'filter_type', '')))
         self.type_combo.set_tooltip_text('只看某一类文档（可和右边的来源叠加）')
-        self.type_combo.connect('changed', lambda *a: self.reload())
+        self.type_combo.connect('changed', self.on_filter_changed)
         toolbar.pack_start(self.type_combo, False, False, 0)
 
         self.src_combo = Gtk.ComboBoxText()
         self.src_combo.append_text('全部来源')
         for _s in recent.SOURCE_CHOICES:
             self.src_combo.append_text(_s)
-        self.src_combo.set_active(0)
+        self.src_combo.set_active(choice_index(recent.SOURCE_CHOICES,
+                                               core.conf('ui', 'filter_source', '')))
         self.src_combo.set_tooltip_text('只看云端 / 微信 / 本地来的文档')
-        self.src_combo.connect('changed', lambda *a: self.reload())
+        self.src_combo.connect('changed', self.on_filter_changed)
         toolbar.pack_start(self.src_combo, False, False, 0)
+
+        self.clear_filter_btn = Gtk.Button()
+        self.clear_filter_btn.set_image(Gtk.Image.new_from_icon_name(
+            'edit-clear-symbolic', Gtk.IconSize.BUTTON))
+        self.clear_filter_btn.set_tooltip_text('清除筛选，显示全部文档')
+        self.clear_filter_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self.clear_filter_btn.set_no_show_all(True)   # 只在有筛选时露出来
+        self.clear_filter_btn.connect('clicked', self.on_clear_filter)
+        toolbar.pack_start(self.clear_filter_btn, False, False, 0)
 
         self.refresh_btn = Gtk.Button()
         self.refresh_btn.set_image(Gtk.Image.new_from_icon_name(
@@ -405,13 +429,26 @@ class App(object):
         box.pack_start(toolbar, False, False, 0)
 
         # 列表（两级：分组 -> 文档）
-        self.store = Gtk.TreeStore(bool, str, str, str, str, str, str, str, str, float)
+        self.store = Gtk.TreeStore(bool, str, str, str, str, str, str, str, str, float, float)
         view = Gtk.TreeView(model=self.store)
         view.set_headers_visible(True)
         view.set_enable_tree_lines(False)
         view.set_show_expanders(True)
         view.set_level_indentation(14)
         view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+
+        # 点表头排序。不用 GTK 自带的 sort_column_id：树里混着「分组行」和
+        # 「文件行」，模型排序会把分组行也一起搬走，分组就散了。改成每次点击
+        # 自己重排重填（reload），顺序完全可控。
+        self._columns = {}
+        self._sort = None          # None = 默认（按时间分组）；否则 (字段, 是否降序)
+
+        def _sortable(col, field):
+            # 表头没有 tooltip API（TreeViewColumn 不实现 GtkTooltip），
+            # 排序提示写在方向箭头和状态栏里
+            col.set_clickable(True)
+            col.connect('clicked', self.on_sort_clicked, field)
+            self._columns[field] = col
 
         # 名称（图标 + 文本）
         self.icon_cell = Gtk.CellRendererPixbuf()
@@ -425,6 +462,7 @@ class App(object):
         col.set_cell_data_func(name_cell, self._name_text_func)
         col.set_fixed_width(320)
         col.set_resizable(True)
+        _sortable(col, 'name')
         view.append_column(col)
 
         # 来源
@@ -433,6 +471,7 @@ class App(object):
         col.pack_start(src_cell, True)
         col.set_cell_data_func(src_cell, self._source_func)
         col.set_fixed_width(64)
+        _sortable(col, 'source')
         view.append_column(col)
 
         # 类型
@@ -441,6 +480,7 @@ class App(object):
         col.pack_start(type_cell, True)
         col.set_cell_data_func(type_cell, self._plain_func(C_TYPE))
         col.set_fixed_width(64)
+        _sortable(col, 'type')
         view.append_column(col)
 
         # 大小
@@ -450,6 +490,7 @@ class App(object):
         col.pack_start(size_cell, True)
         col.set_cell_data_func(size_cell, self._plain_func(C_SIZE))
         col.set_fixed_width(80)
+        _sortable(col, 'size')
         view.append_column(col)
 
         # 修改时间
@@ -458,6 +499,7 @@ class App(object):
         col.pack_start(when_cell, True)
         col.set_cell_data_func(when_cell, self._plain_func(C_WHEN))
         col.set_fixed_width(105)
+        _sortable(col, 'mtime')
         view.append_column(col)
 
         # 所在文件夹
@@ -467,6 +509,7 @@ class App(object):
         col.pack_start(dir_cell, True)
         col.set_cell_data_func(dir_cell, self._dir_func)
         col.set_min_width(160)
+        _sortable(col, 'dir')
         view.append_column(col)
 
         view.connect('row-activated', self.on_activate)
@@ -881,17 +924,19 @@ class App(object):
         lines.append('详细自检：wps-copy --doctor')
         return '\n'.join(lines)
 
-    def _add_file(self, parent, p, mt=None, size=None):
+    def _add_file(self, parent, p, mt=None, size=None, nbytes=None):
         """往列表里插一行文件（分组行不走这里）。"""
-        if mt is None:
+        if mt is None or nbytes is None:
             try:
                 st = os.stat(p)
-                mt, size = st.st_mtime, human_size(st.st_size)
+                mt, nbytes = st.st_mtime, st.st_size
+                size = human_size(nbytes)
             except OSError:
-                mt, size = 0, '?'
+                mt, size, nbytes = 0, '?', None
         self.store.append(parent, [
             False, type_icon(p), os.path.basename(p), source_of(p),
-            type_label(p), size, os.path.dirname(p), when_str(mt), p, mt])
+            type_label(p), size, os.path.dirname(p), when_str(mt), p, mt,
+            float(nbytes or 0)])
         self.rows.append(p)
         return mt
 
@@ -914,10 +959,66 @@ class App(object):
         """「表格 / 微信」这样的一行字，状态栏和空列表提示共用。"""
         return ' / '.join(x for x in (self._type_filter(), self._src_filter()) if x)
 
+    def _save_filters(self):
+        """把当前筛选写进配置，下次打开窗口还是这个视角。"""
+        try:
+            core.save_conf({('ui', 'filter_type'): self._type_filter(),
+                            ('ui', 'filter_source'): self._src_filter()})
+        except Exception as ex:
+            # 存不下只影响「记不住」，不该让筛选本身失效
+            core.log('保存筛选条件失败: %r' % (ex,))
+
+    def on_filter_changed(self, *_):
+        if self._quiet:      # 程序自己改下拉（恢复配置、清除筛选）不算用户操作
+            return
+        self._save_filters()
+        self.reload()
+
+    def on_clear_filter(self, *_):
+        """一键回到「全部」：筛选会被记住，得给条明路回去。"""
+        self._quiet = True
+        try:
+            self.type_combo.set_active(0)
+            self.src_combo.set_active(0)
+        finally:
+            self._quiet = False
+        self._save_filters()
+        self.reload()
+
+    # ------------------------------------------------ 排序
+    def on_sort_clicked(self, _col, field):
+        """表头三态：升序 → 降序 → 回到默认（按修改时间分组）。
+
+        不做成 GTK 的 sort_column_id：模型排序会把分组行一起搬走，
+        「今天/昨天」就散了。这里改成自己重排重填，顺序完全可控。
+        """
+        if not self._sort or self._sort[0] != field:
+            self._sort = (field, False)
+        elif not self._sort[1]:
+            self._sort = (field, True)
+        else:
+            self._sort = None
+        self._sync_sort_titles()
+        self.reload()
+
+    def _sync_sort_titles(self):
+        """排序方向写进表头文字（'大小 ↓'）。
+
+        不用 set_sort_indicator：那个要求列有 sort_column_id，一旦设了，
+        点表头会走 TreeView 的模型排序，分组行也会被重排。
+        """
+        for field, col in self._columns.items():
+            title = recent.SORT_LABELS[field]
+            if self._sort and self._sort[0] == field:
+                title += ' ↓' if self._sort[1] else ' ↑'
+            col.set_title(title)
+
     def reload(self):
         self.store.clear()
-        kw = self.entry.get_text().strip().lower()
-        self._kw = kw
+        # 搜索框原文留着：单元格高亮要按原文分词，转小写交给 highlight_markup
+        raw_kw = self.entry.get_text().strip()
+        terms = recent.split_terms(raw_kw)
+        self._kw = raw_kw
         tsel, ssel = self._type_filter(), self._src_filter()
         paths = recent.parse_recent(limit=max(200, core.conf_int('ui', 'limit', 80)))
         # 托盘菜单的「最近 5 个」用完整列表：搜索和筛选都只是「看」的姿势，
@@ -925,78 +1026,107 @@ class App(object):
         self._all_paths = list(paths)
 
         def keep(p):
-            if not match_filter(p, tsel, ssel):
-                return False
-            if not kw:
-                return True
-            return kw in os.path.basename(p).lower() or kw in os.path.dirname(p).lower()
+            # 多个词是「并且」：每个词都要在名字或目录里出现
+            return match_filter(p, tsel, ssel) and recent.match_terms(p, terms)
+
+        def entries_of(items):
+            """[(路径, 字节数, 修改时间)]；stat 失败的大小记 None，显示成 ?。"""
+            out = []
+            for p in items:
+                try:
+                    st = os.stat(p)
+                    out.append((p, st.st_size, st.st_mtime))
+                except OSError:
+                    out.append((p, None, 0))
+            return out
 
         self.rows = []
         total = 0
 
-        # 置顶：单独一组放最前，时间分组里不再重复出现。
+        # 置顶：单独一组放最前，其它分组里不再重复出现。
         # 文件已经不在了就先不显示（U 盘没插、目录被挪走都会这样），但也不
         # 从配置里删 —— 换回来还应该在。
         pinned_all = core.pinned_paths()
-        pinned = [p for p in pinned_all if os.path.isfile(p) and keep(p)]
-        if pinned:
-            grow = self.store.append(None, [
-                True, '', '置顶', '', '', '%d 个' % len(pinned), '', '', '', 0.0])
-            for p in pinned:
-                self._add_file(grow, p)
-            total += len(pinned)
+        pinned_entries = entries_of(
+            [p for p in pinned_all if os.path.isfile(p) and keep(p)])
         pinned_set = set(pinned_all)
+        rest_entries = entries_of(
+            [p for p in paths if p not in pinned_set and keep(p)])
 
-        buckets = {}
-        for p in paths:
-            if p in pinned_set or not keep(p):
-                continue
-            try:
-                st = os.stat(p)
-                mt, size = st.st_mtime, human_size(st.st_size)
-            except OSError:
-                mt, size = 0, '?'
-            key, label = bucket_of(mt)
-            buckets.setdefault(key, (label, []))[1].append((p, size, mt))
+        sort_label = ''
+        if self._sort:
+            # 手动排序时不按天分组：两套顺序会打架 —— 点了「大小」却看到
+            # 「今天」那组里塞着去年的大文件，只会更糊涂。
+            field, rev = self._sort
+            sort_label = '按%s%s' % (recent.SORT_LABELS.get(field, field),
+                                    '降序' if rev else '升序')
+            pinned_entries = recent.sort_entries(pinned_entries, field, rev)
+            rest_entries = recent.sort_entries(rest_entries, field, rev)
+            groups = [('按%s排序' % recent.SORT_LABELS.get(field, field),
+                       rest_entries)]
+        else:
+            buckets = {}
+            for p, nbytes, mt in rest_entries:
+                key, label = bucket_of(mt)
+                buckets.setdefault(key, (label, []))[1].append((p, nbytes, mt))
+            groups = []
+            for key in sorted(buckets):
+                label, items = buckets[key]
+                if items:
+                    items.sort(key=lambda x: x[2], reverse=True)
+                    groups.append((label, items))
 
-        for key in sorted(buckets):
-            label, items = buckets[key]
+        def add_group(label, items):
+            grow = self.store.append(None, [
+                True, '', label, '', '', '%d 个' % len(items), '', '', '', 0.0, 0.0])
+            for (p, nbytes, mt) in items:
+                size = '?' if nbytes is None else human_size(nbytes)
+                self._add_file(grow, p, mt, size, nbytes)
+
+        if pinned_entries:
+            add_group('置顶', pinned_entries)
+            total += len(pinned_entries)
+        for label, items in groups:
             if not items:
                 continue
-            items.sort(key=lambda x: x[2], reverse=True)
-            grow = self.store.append(None, [
-                True, '', label, '', '', '%d 个' % len(items), '', '', '', 0.0])
-            for (p, size, mt) in items:
-                self._add_file(grow, p, mt, size)
+            add_group(label, items)
             total += len(items)
 
         self.view.expand_all()
         # 重载后选择被清空，按钮状态要跟着复位（clear() 未必触发 changed）
         self.copy_btn.set_sensitive(False)
         self.copy_btn.set_label('复制选中文件')
+        flt = self._filter_label()
+        # 有筛选时把「清除」露出来：筛选是记住的，找不到这个按钮就没法一眼还原
+        try:
+            self.clear_filter_btn.set_visible(bool(flt))
+        except Exception:
+            pass
         if total:
-            npin = len(pinned)
+            npin = len(pinned_entries)
             extra = '（%d 个置顶）' % npin if npin else ''
-            flt = self._filter_label()
             if flt:
                 extra += ' · 筛选：%s' % flt
+            if sort_label:
+                extra += ' · %s' % sort_label
             self.set_status('共 %d 个文档%s · 双击或回车复制，↑↓ 选择，Ctrl/Shift 多选'
                             % (total, extra))
             self.status.set_tooltip_text(None)
             self._show_empty_hint('')
-        elif kw or self._filter_label():
+        elif raw_kw or flt:
             # 搜不到有两种原因：关键词不对，或者筛选条件把它挡掉了。
             # 只说「没有匹配」的话，用户不会想到是上面那两个下拉干的。
-            flt = self._filter_label()
-            if kw and flt:
-                msg = '没有同时符合「%s」和筛选（%s）的文档' % (kw, flt)
-            elif kw:
-                msg = '没有匹配「%s」的文档' % kw
+            if raw_kw and flt:
+                msg = '没有同时符合「%s」和筛选（%s）的文档' % (raw_kw, flt)
+            elif raw_kw:
+                msg = '没有匹配「%s」的文档' % raw_kw
             else:
                 msg = '筛选（%s）下没有文档' % flt
             hint = msg + '\n换个关键词'
+            if len(terms) > 1:
+                hint += '（多个词空格分开，要同时命中）'
             if flt:
-                hint += '，或把筛选调回「全部」'
+                hint += '，或点右边 × 清除筛选'
             hint += '，或清空搜索框'
             self.set_status(msg)
             self.status.set_tooltip_text(None)

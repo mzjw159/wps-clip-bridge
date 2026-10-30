@@ -17,10 +17,11 @@ if _SRC not in sys.path:
 os.environ.setdefault('GDK_BACKEND', 'x11')
 
 try:
-    from wpsclip import gui
+    from wpsclip import gui, recent
     _IMPORT_ERR = None
 except Exception as _ex:      # 没装 PyGObject 的环境跳过，而不是报错
     gui = None
+    recent = None
     _IMPORT_ERR = _ex
 
 _need_gi = unittest.skipIf(gui is None, '需要 PyGObject（gi）')
@@ -115,6 +116,42 @@ class HighlightMarkupTest(unittest.TestCase):
         # 'İ'.lower() 长度变了，索引会对不上；宁可不标，也不能标错位置
         out = gui.highlight_markup('İstanbul.docx', 'docx')
         self.assertNotIn('<span background=', out)
+
+    def test_multiple_words_both_highlighted(self):
+        # 「季度 报告」两个词各自亮，而不是整串当关键词（那样一个都搜不到）
+        out = gui.highlight_markup('季度报告2026.docx', '季度 2026')
+        self.assertIn('>季度</span>', out)
+        self.assertIn('>2026</span>', out)
+        self.assertIn('报告', out)
+
+    def test_extra_spaces_ignored(self):
+        a = gui.highlight_markup('季度报告.docx', '  季度   报告  ')
+        b = gui.highlight_markup('季度报告.docx', '季度 报告')
+        self.assertEqual(a, b)
+
+    def test_whitespace_only_keyword_highlights_nothing(self):
+        self.assertEqual(gui.highlight_markup('a<b>c', '   '), 'a&lt;b&gt;c')
+
+
+@_need_gi
+class ChoiceIndexTest(unittest.TestCase):
+    """配置里存的是中文取值，恢复下拉时要映射回序号（0 是「全部」）。"""
+
+    def test_known_value(self):
+        self.assertEqual(gui.choice_index(recent.TYPE_CHOICES, '表格'), 2)
+
+    def test_empty_means_all(self):
+        self.assertEqual(gui.choice_index(recent.TYPE_CHOICES, ''), 0)
+        self.assertEqual(gui.choice_index(recent.TYPE_CHOICES, None), 0)
+
+    def test_unknown_value_falls_back_to_all(self):
+        # 版本升级后旧取值可能已经不在了，不能停在一个不存在的选项上
+        self.assertEqual(gui.choice_index(recent.TYPE_CHOICES, '不存在的类型'), 0)
+
+    def test_every_choice_roundtrips(self):
+        for name in recent.SOURCE_CHOICES:
+            idx = gui.choice_index(recent.SOURCE_CHOICES, name)
+            self.assertEqual(recent.SOURCE_CHOICES[idx - 1], name)
 
 
 @_need_gi

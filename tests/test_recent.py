@@ -417,5 +417,131 @@ class LabelChoicesTest(unittest.TestCase):
             recent.source_of('/home/u/WPS Cloud Files/wechat/a.docx'), '云端')
 
 
+class SearchTermsTest(unittest.TestCase):
+    """搜索框里的多个词：空格分开、每个都要命中。"""
+
+    def test_split_basic(self):
+        self.assertEqual(recent.split_terms('季度 报告'), ('季度', '报告'))
+        self.assertEqual(recent.split_terms('  季度   报告  '), ('季度', '报告'))
+
+    def test_split_lowercases(self):
+        self.assertEqual(recent.split_terms('Report 2026'), ('report', '2026'))
+
+    def test_split_empty(self):
+        self.assertEqual(recent.split_terms(''), ())
+        self.assertEqual(recent.split_terms('   '), ())
+        self.assertIsInstance(recent.split_terms(None), tuple)
+
+    def test_split_fullwidth_space(self):
+        # 中文输入法下打出来的全角空格也要能分词
+        self.assertEqual(recent.split_terms('季度\u3000报告'), ('季度', '报告'))
+
+    def test_match_all_terms(self):
+        p = '/home/u/2026/季度报告.docx'
+        self.assertTrue(recent.match_terms(p, recent.split_terms('季度 报告')))
+        self.assertTrue(recent.match_terms(p, recent.split_terms('报告 2026')))
+        # 键盘敲的顺序不影响
+        self.assertTrue(recent.match_terms(p, recent.split_terms('2026 报告')))
+
+    def test_match_requires_every_term(self):
+        p = '/home/u/季度报告.docx'
+        self.assertFalse(recent.match_terms(p, recent.split_terms('季度 预算')))
+
+    def test_match_empty_terms_keeps_everything(self):
+        self.assertTrue(recent.match_terms('/a/b.docx', ()))
+
+    def test_match_searches_dirs_too(self):
+        self.assertTrue(recent.match_terms('/home/u/微信/a.docx',
+                                           recent.split_terms('微信')))
+
+
+class HitSpansTest(unittest.TestCase):
+    """高亮区间：重叠要合并，大小写折叠改长度时不标。"""
+
+    def test_single(self):
+        self.assertEqual(recent.hit_spans('合同2026.docx', ('2026',)), [(2, 6)])
+
+    def test_multiple_words(self):
+        spans = recent.hit_spans('季度报告2026', ('季度', '2026'))
+        self.assertEqual(spans, [(0, 2), (4, 8)])
+
+    def test_case_insensitive(self):
+        self.assertEqual(recent.hit_spans('Report.DOCX', ('docx',)), [(7, 11)])
+
+    def test_overlap_merged(self):
+        # 'ab' 与 'bc' 在 'abc' 上重叠，合并成一段，不能嵌套出两层标签
+        self.assertEqual(recent.hit_spans('abc', ('ab', 'bc')), [(0, 3)])
+
+    def test_repeated_hits(self):
+        self.assertEqual(recent.hit_spans('aXbXc', ('x',)), [(1, 2), (3, 4)])
+
+    def test_no_terms(self):
+        self.assertEqual(recent.hit_spans('abc', ()), [])
+        self.assertEqual(recent.hit_spans('', ('a',)), [])
+
+    def test_length_changing_case_fold(self):
+        # 'İ'.lower() 是 'i̇'（两个码位），索引对不上，宁可不标
+        self.assertEqual(recent.hit_spans('İstanbul.docx', ('docx',)), [])
+
+
+class SortEntriesTest(unittest.TestCase):
+    """点表头排序：可重现、同级不打乱。"""
+
+    def setUp(self):
+        self.rows = [
+            ('/a/报告b.docx', 300, 100),
+            ('/b/报告a.docx', 100, 300),
+            ('/c/表格.docx', 200, 200),
+        ]
+
+    def paths(self, rows):
+        return [p for p, _n, _m in rows]
+
+    def test_by_name(self):
+        got = self.paths(recent.sort_entries(self.rows, 'name'))
+        self.assertEqual(got, ['/b/报告a.docx', '/a/报告b.docx', '/c/表格.docx'])
+
+    def test_by_size(self):
+        got = self.paths(recent.sort_entries(self.rows, 'size'))
+        self.assertEqual(got, ['/b/报告a.docx', '/c/表格.docx', '/a/报告b.docx'])
+
+    def test_by_size_reverse(self):
+        got = self.paths(recent.sort_entries(self.rows, 'size', reverse=True))
+        self.assertEqual(got, ['/a/报告b.docx', '/c/表格.docx', '/b/报告a.docx'])
+
+    def test_by_mtime(self):
+        got = self.paths(recent.sort_entries(self.rows, 'mtime'))
+        self.assertEqual(got, ['/a/报告b.docx', '/c/表格.docx', '/b/报告a.docx'])
+
+    def test_by_type(self):
+        got = self.paths(recent.sort_entries(self.rows, 'type'))
+        self.assertEqual(got[0], '/b/报告a.docx')      # 两个文档在前
+        self.assertEqual(got[-1], '/c/表格.docx')
+
+    def test_by_dir(self):
+        got = self.paths(recent.sort_entries(self.rows, 'dir'))
+        self.assertEqual(got, ['/a/报告b.docx', '/b/报告a.docx', '/c/表格.docx'])
+
+    def test_ties_keep_name_order_even_when_reversed(self):
+        # 同样大小：降序时仍按文件名升序，否则每次刷新顺序都在跳
+        rows = [('/x/b.docx', 10, 1), ('/x/a.docx', 10, 1), ('/x/c.docx', 20, 1)]
+        got = self.paths(recent.sort_entries(rows, 'size', reverse=True))
+        self.assertEqual(got, ['/x/c.docx', '/x/a.docx', '/x/b.docx'])
+
+    def test_unknown_field_raises(self):
+        with self.assertRaises(ValueError):
+            recent.sort_entries(self.rows, 'nope')
+
+    def test_none_size_treated_as_zero(self):
+        rows = [('/a.docx', None, 0), ('/b.docx', 5, 0)]
+        self.assertEqual(self.paths(recent.sort_entries(rows, 'size')),
+                         ['/a.docx', '/b.docx'])
+
+    def test_does_not_mutate_input(self):
+        before = list(self.rows)
+        recent.sort_entries(self.rows, 'size')
+        self.assertEqual(self.rows, before)
+
+
 if __name__ == '__main__':
     unittest.main()

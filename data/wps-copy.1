@@ -30,8 +30,13 @@ not invalidate the copied file.
 List recent documents: index, type, size, modification time and full path.
 Pinned documents are marked with a star; the index numbers are exactly what
 \fBwps\-copy \fIN\fR accepts.
+Multiple keywords must all match (name or directory); order does not matter.
 .B \-\-pinned
-limits the list to pinned documents and
+limits the list to pinned documents,
+.B \-\-sort
+takes one of name, source, type, size, mtime or dir,
+.B \-\-reverse
+flips that order, and
 .B \-\-json
 emits machine-readable records (path, name, dir, kind, source, size, size_bytes,
 mtime, when, pinned).

@@ -427,6 +427,112 @@ def type_label(path):
     return _TYPE_BY_EXT.get(ext, '其他')
 
 
+# ---------------------------------------------------------------- 搜索与排序
+#
+# 放在这里而不是 gui 里：界面和命令行都要用，而命令行不能 import gui（会把
+# GTK 拖进来，终端里没显示就起不来）。这几个函数也都不依赖 GTK，能单独测。
+
+def split_terms(text):
+    """把搜索框里的一串字切成词，词之间是「并且」关系。
+
+    以前是整串子串匹配：「季度 报告」要求文件名里真有「季度 报告」这几个连着
+    的字（还带个空格），结果一个都搜不到。现在按空白切开分别找，和
+    ``wps-copy --list 季度 报告`` 的语义对齐。
+
+    str.split() 认所有空白（半角空格、Tab、全角空格 U+3000 都算），
+    中文输入法下打出来的空格也就能正常分词。
+    """
+    if not text:
+        return ()
+    return tuple(w for w in text.lower().split() if w)
+
+
+def match_terms(path, terms):
+    """所有词都出现在路径里才算命中（文件名或所在目录都算）。"""
+    if not terms:
+        return True
+    low = path.lower()
+    return all(t in low for t in terms)
+
+
+def hit_spans(text, terms):
+    """text 里所有命中词的区间，已合并重叠、按起点排序。
+
+    只给区间不生成 markup：gui 那边负责转义和包标签，这里纯字符串处理，
+    没有 GTK 也能测。大小写折叠改变长度时（如 'İ'）返回空 —— 索引对不上，
+    宁可不高亮也不要把字标错。
+    """
+    if not text or not terms:
+        return []
+    low = text.lower()
+    if len(low) != len(text):
+        return []
+    spans = []
+    for t in terms:
+        k = t.lower()
+        if not k:
+            continue
+        i = 0
+        while True:
+            hit = low.find(k, i)
+            if hit < 0:
+                break
+            spans.append((hit, hit + len(k)))
+            # 跳过一个词的完整长度再找：同一个词连着出现两次要标两段，
+            # 但一次命中内部不该再被同一个词切一刀。
+            i = hit + len(k)
+    if not spans:
+        return []
+    spans.sort()
+    merged = [list(spans[0])]
+    for start, end in spans[1:]:
+        if start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(s, e) for s, e in merged]
+
+
+# 表头能点的列：字段名 -> 中文名（状态栏和分组标题都要用）
+SORT_LABELS = {
+    'name': '名称',
+    'source': '来源',
+    'type': '类型',
+    'size': '大小',
+    'mtime': '修改时间',
+    'dir': '所在文件夹',
+}
+
+
+def sort_entries(entries, field, reverse=False):
+    """按 field 排 ``[(path, size_bytes, mtime), ...]``，返回新列表。
+
+    同名/同大小是常事，排序必须可重现，否则每次刷新顺序都在变、用户点不到
+    刚才那一行。做法是先按 (文件名, 完整路径) 排一遍当基底，再做稳定排序 ——
+    Python 的 sort 是稳定的，主键相同的行就保持基底顺序，升序时不会跟着翻转。
+    """
+    if field not in SORT_LABELS:
+        raise ValueError('未知的排序列：%r' % (field,))
+
+    def primary(e):
+        p, nbytes, mt = e
+        if field == 'name':
+            return os.path.basename(p).lower()
+        if field == 'source':
+            return source_of(p)
+        if field == 'type':
+            return type_label(p)
+        if field == 'size':
+            return nbytes or 0
+        if field == 'mtime':
+            return mt or 0
+        return os.path.dirname(p).lower()
+
+    rows = sorted(entries, key=lambda e: (os.path.basename(e[0]).lower(), e[0]))
+    rows.sort(key=primary, reverse=reverse)
+    return rows
+
+
 if __name__ == '__main__':
     for i, p in enumerate(parse_recent(), 1):
         print('%2d. %s' % (i, p))

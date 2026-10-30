@@ -6,10 +6,11 @@
 
     wps-copy                 # 复制最近修改的第 1 个文档
     wps-copy --list          # 列出最近文档（置顶的标 ★）
-    wps-copy --list 报告      # 只列名字/目录含「报告」的
+    wps-copy --list 报告      # 只列名字/目录含「报告」的（多个词空格分开，要都命中）
+    wps-copy --list --sort size -r   # 按大小从大到小列
     wps-copy --list --json   # 给脚本用：JSON 数组，带大小、时间、来源
     wps-copy 3               # 复制清单里第 3 个
-    wps-copy 报告            # 复制文件名含「报告」的（多个命中则列候选）
+    wps-copy 季度 报告        # 复制名字里同时含「季度」「报告」的（多个命中则列候选）
     wps-copy -f a.pdf b.doc  # 直接指定文件（可多个）
     wps-copy --pin a.docx    # 置顶（可多个；不带参数则列出当前置顶）
     wps-copy --unpin a.docx  # 取消置顶
@@ -79,24 +80,50 @@ def _entries(only_pinned=False):
 def cmd_list(args):
     as_json = False
     only_pinned = False
+    sort_field = ''
+    reverse = False
     words = []
-    for a in args:
+    i = 0
+    while i < len(args):
+        a = args[i]
+        i += 1
         if a in ('--json', '-j'):
             as_json = True
         elif a in ('--pinned', '-p', '--pin-only'):
             only_pinned = True
+        elif a in ('--sort', '-s'):
+            if i >= len(args):
+                print('--sort 后面要跟字段：%s' % '、'.join(recent.SORT_LABELS))
+                return 2
+            sort_field = args[i]
+            i += 1
+            if sort_field not in recent.SORT_LABELS:
+                print('不认识的排序字段：%s（可选：%s）'
+                      % (sort_field, '、'.join(recent.SORT_LABELS)))
+                return 2
+        elif a in ('--reverse', '-r'):
+            reverse = True
         elif a in ('-h', '--help'):
             return usage(0)
         elif a.startswith('-'):
             print('未知选项：%s' % a)
             return 2
         else:
-            words.append(a.lower())
+            # 一个参数里可能带空格（"季度 报告"），拆成多个词
+            words.extend(recent.split_terms(a))
 
     rows = _entries(only_pinned=only_pinned)
     if words:
-        rows = [(p, pin) for (p, pin) in rows
-                if all(w in p.lower() for w in words)]
+        rows = [(p, pin) for (p, pin) in rows if recent.match_terms(p, words)]
+
+    if sort_field:
+        # 排序要用原始字节数和时间戳；顺手把 stat 结果留着，下面打印不再重算
+        stats = {p: _stat(p) for p, _pin in rows}
+        ordered = recent.sort_entries(
+            [(p, stats[p][3], stats[p][2]) for p, _pin in rows],
+            sort_field, reverse)
+        pin_of = dict(rows)
+        rows = [(p, pin_of[p]) for p, _nbytes, _mt in ordered]
 
     if as_json:
         out = []
@@ -197,7 +224,10 @@ def pick(args):
     """把参数解析成文件路径列表。"""
     # 与 --list 用同一份清单：清单第 3 行必须就是 wps-copy 3 复制的东西
     rows = [p for p, _pin in _entries()]
-    target = args[0]
+    # 多个词拼起来一起匹配：「wps-copy 季度 报告」和图形界面里搜「季度 报告」
+    # 是同一个语义（每个词都要命中）
+    target = ' '.join(args).strip()
+    terms = recent.split_terms(target)
 
     if target.isdigit():
         idx = int(target)
@@ -206,9 +236,10 @@ def pick(args):
             return None
         return [rows[idx - 1]]
 
-    hits = [p for p in rows if target.lower() in os.path.basename(p).lower()]
+    hits = [p for p in rows
+            if recent.match_terms(os.path.basename(p), terms)]
     if not hits:
-        hits = [p for p in rows if target.lower() in p.lower()]
+        hits = [p for p in rows if recent.match_terms(p, terms)]
     if not hits:
         print('没有匹配「%s」的文档。用 wps-copy --list 看看清单。' % target)
         return None

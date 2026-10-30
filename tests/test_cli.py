@@ -220,6 +220,101 @@ class PinTest(_Fixture):
         self.assertIn(a, out)
 
 
+class SortTest(_Fixture):
+    """``--list --sort``：字段名、方向、以及和置顶的配合。"""
+
+    def make_sized(self, name, size, age=10):
+        p = os.path.join(self.tmp, name)
+        with open(p, 'w') as f:
+            f.write('x' * size)
+        t = time.time() - age
+        os.utime(p, (t, t))
+        return p
+
+    def listed(self, out):
+        return [ln for ln in out.splitlines() if ln[:1].isdigit()]
+
+    def test_sort_by_size(self):
+        small = self.make_sized('小.docx', 10, 30)
+        big = self.make_sized('大.docx', 4000, 20)
+        mid = self.make_sized('中.docx', 500, 10)
+        self.write_conf([small, big, mid])
+
+        code, out = self.run_cli(['--list', '--sort', 'size'])
+        self.assertEqual(code, 0)
+        lines = self.listed(out)
+        self.assertTrue(lines[0].endswith(small), lines[0])
+        self.assertTrue(lines[-1].endswith(big), lines[-1])
+
+    def test_sort_by_size_reverse(self):
+        small = self.make_sized('小.docx', 10, 30)
+        big = self.make_sized('大.docx', 4000, 20)
+        self.write_conf([small, big])
+        _code, out = self.run_cli(['--list', '--sort', 'size', '--reverse'])
+        self.assertTrue(self.listed(out)[0].endswith(big))
+
+    def test_sort_by_name(self):
+        b = self.make('b.docx', 10)
+        a = self.make('a.docx', 20)
+        self.write_conf([b, a])
+        _code, out = self.run_cli(['--list', '-s', 'name'])
+        lines = self.listed(out)
+        self.assertTrue(lines[0].endswith(a))
+        self.assertTrue(lines[1].endswith(b))
+
+    def test_pin_mark_survives_sorting(self):
+        # 排序只改顺序，★ 与序号含义都不能变
+        b = self.make('b.docx', 10)
+        a = self.make('a.docx', 20)
+        self.write_conf([b, a])
+        core.set_pinned([b])
+        _code, out = self.run_cli(['--list', '--sort', 'name'])
+        self.assertIn('1.   文档', out)
+        self.assertIn('2. ★ 文档', out)
+
+    def test_unknown_sort_field(self):
+        self.write_conf([self.make('a.docx')])
+        code, out = self.run_cli(['--list', '--sort', 'nope'])
+        self.assertEqual(code, 2)
+        self.assertIn('不认识的排序字段', out)
+
+    def test_sort_without_value(self):
+        code, out = self.run_cli(['--list', '--sort'])
+        self.assertEqual(code, 2)
+        self.assertIn('后面要跟字段', out)
+
+
+class SearchTermsTest(_Fixture):
+    """多个关键词：空格分开，每个都要命中；命令行与图形界面同一套语义。"""
+
+    def setUp(self):
+        super(SearchTermsTest, self).setUp()
+        self.report = self.make('季度报告.docx', 10)
+        self.budget = self.make('季度预算.xlsx', 20)
+        self.write_conf([self.report, self.budget])
+
+    def test_list_all_words_must_match(self):
+        code, out = self.run_cli(['--list', '季度', '报告'])
+        self.assertEqual(code, 0)
+        self.assertIn('季度报告.docx', out)
+        self.assertNotIn('季度预算.xlsx', out)
+
+    def test_list_word_inside_one_argument(self):
+        # 带引号传进来的 "季度 报告" 也要能分词
+        _code, out = self.run_cli(['--list', '季度 报告'])
+        self.assertIn('季度报告.docx', out)
+        self.assertNotIn('季度预算.xlsx', out)
+
+    def test_pick_joins_words(self):
+        self.assertEqual(cli.pick(['季度', '报告']), [self.report])
+
+    def test_pick_no_match(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertIsNone(cli.pick(['季度', '没有的词']))
+        self.assertIn('没有匹配', buf.getvalue())
+
+
 class UsageTest(unittest.TestCase):
     def test_unknown_list_option(self):
         buf = io.StringIO()
