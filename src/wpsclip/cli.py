@@ -47,15 +47,19 @@ def _pad(s, width):
 
 
 def _stat(p):
-    """(大小文字, 修改时间文字, 时间戳)；拿不到就退化，别让整行输出挂掉。"""
+    """(大小文字, 修改时间文字, 时间戳, 字节数)。
+
+    拿不到就退化，别让整行输出挂掉。``--json`` 里两个大小都给：人看的和
+    脚本算的（"4.0 KB" 没法直接比较大小）。
+    """
     try:
         st = os.stat(p)
     except OSError:
-        return '?', '?', 0
+        return '?', '?', 0, 0
     import datetime
     return (recent._fmt_size(st.st_size),
             datetime.datetime.fromtimestamp(st.st_mtime).strftime('%m-%d %H:%M'),
-            st.st_mtime)
+            st.st_mtime, st.st_size)
 
 
 def _entries(only_pinned=False):
@@ -97,7 +101,7 @@ def cmd_list(args):
     if as_json:
         out = []
         for p, pin in rows:
-            size, when, mt = _stat(p)
+            size, when, mt, nbytes = _stat(p)
             out.append({
                 'path': p,
                 'name': os.path.basename(p),
@@ -105,6 +109,7 @@ def cmd_list(args):
                 'kind': recent.type_label(p),
                 'source': recent.source_of(p),
                 'size': size,
+                'size_bytes': nbytes,
                 'mtime': mt,
                 'when': when,
                 'pinned': pin,
@@ -131,7 +136,7 @@ def cmd_list(args):
     kind_w = max(_disp_width(recent.type_label(p)) for p, _ in rows)
     size_w = max(_disp_width(_stat(p)[0]) for p, _ in rows)
     for i, (p, pin) in enumerate(rows, 1):
-        size, when, _mt = _stat(p)
+        size, when, _mt, _nb = _stat(p)
         # 大小右对齐（数字比宽度有意义），类型左对齐（中文还好，PDF 是三个字符）
         print('%*d. %s %s  %s  %s  %s'
               % (width, i, '★' if pin else ' ',

@@ -156,6 +156,7 @@ class JsonTest(_Fixture):
         self.assertTrue(row['pinned'])
         self.assertGreater(row['mtime'], 0)
         self.assertIn('B', row['size'])
+        self.assertEqual(row['size_bytes'], 32)   # 夹具写的就是 32 字节
 
     def test_cloud_source_reported(self):
         p = self.make('云合同.docx', 10)
