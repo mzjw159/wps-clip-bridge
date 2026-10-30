@@ -268,7 +268,7 @@ def _notify_icon():
 def notify(summary, body=''):
     """发一条桌面通知（notify-send 不存在就静默跳过）。"""
     try:
-        args = ['notify-send', '-a', 'WPS 最近文档复制',
+        args = ['notify-send', '-a', 'WPS 最近文档',
                 '-i', _notify_icon(), '-t', '3000', summary]
         if body:
             args.append(body)

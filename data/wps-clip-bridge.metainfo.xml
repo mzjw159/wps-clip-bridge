@@ -3,8 +3,8 @@
   <id>wps-clip-bridge.desktop</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
-  <name>WPS 最近文档复制</name>
-  <name xml:lang="en">WPS Recent Documents Copy</name>
+  <name>WPS 最近文档</name>
+  <name xml:lang="en">WPS Recent Documents</name>
   <summary>把 WPS 最近文档直接放进剪贴板</summary>
   <summary xml:lang="en">Put a WPS recent document on the clipboard</summary>
   <description>

@@ -12,7 +12,7 @@ import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.7.1'
+VERSION = '1.7.2'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {

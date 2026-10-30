@@ -35,7 +35,7 @@ SNI_PATH = '/StatusNotifierItem'
 MENU_PATH = '/MenuBar'
 WATCHER_NAME = 'org.kde.StatusNotifierWatcher'
 WATCHER_PATH = '/StatusNotifierWatcher'
-ITEM_TITLE = 'WPS 最近文档复制'
+ITEM_TITLE = 'WPS 最近文档'
 
 # 面板图标一般是 22~24px（2 倍屏再乘 2），多给几个尺寸让面板挑，避免缩放糊
 ICON_SIZES = (22, 24, 32, 48)

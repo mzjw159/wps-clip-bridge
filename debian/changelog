@@ -1,3 +1,19 @@
+wps-clip-bridge (1.7.2) unstable; urgency=medium
+
+  * 应用名称统一为「WPS 最近文档」。此前菜单项、托盘提示、通知的应用名是
+    「WPS 最近文档复制」，而窗口标题是「WPS 最近文档」，同一个程序两种叫法。
+    现在 desktop 的 Name、AppStream 元数据、托盘 tooltip、notify-send 的 -a、
+    设置里的版本行、安装后打印的提示全部一致。
+  * README 按 GitHub 项目首页重写：Release / 许可证 / 平台徽章、界面截图、
+    功能清单、三步安装、可折叠的 FAQ、兼容性表格，深入内容拆到 docs/ 下。
+  * 新增 docs/DESIGN.md（架构与取舍）、docs/DATA-SOURCE.md（数据来源与解析坑）、
+    docs/TROUBLESHOOTING.md（排障）、docs/MAINTAINING.md（发版与换图标），
+    README 从近 600 行压到 300 余行。
+  * 补 LICENSE（MIT）；debian/copyright 的 Source 从「本地开发，无公开仓库」
+    改为 GitHub 仓库地址。
+
+ -- shuai <shuai@localhost>  Fri, 30 Oct 2026 15:18:00 +0800
+
 wps-clip-bridge (1.7.1) unstable; urgency=medium
 
   * 修「窗口最小化到任务栏后，点托盘图标唤不出」。

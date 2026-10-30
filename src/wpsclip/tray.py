@@ -151,7 +151,7 @@ class Tray(object):
             ind = AppIndicator.Indicator.new(
                 _ID, _icon_arg(), AppIndicator.IndicatorCategory.APPLICATION_STATUS)
             ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
-            ind.set_title('WPS 最近文档复制')
+            ind.set_title('WPS 最近文档')
             menu = self._build_menu()
             ind.set_menu(menu)
 
@@ -186,7 +186,7 @@ class Tray(object):
                 icon.set_from_pixbuf(pb)
             else:
                 icon.set_from_file(_icon_arg())
-            icon.set_tooltip_text('WPS 最近文档复制（单击显示窗口）')
+            icon.set_tooltip_text('WPS 最近文档（单击显示窗口）')
             icon.connect('activate', lambda *a: self.on_show())
             icon.connect('popup-menu', self._on_popup)
             icon.set_visible(True)

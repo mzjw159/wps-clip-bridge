@@ -41,7 +41,7 @@ EOF
 安装完成。
 
   立即启动    运行  wps-copy --start     （不用重新登录）
-  图形界面    应用菜单 →「WPS 最近文档复制」，或  wps-copy --gui
+  图形界面    应用菜单 →「WPS 最近文档」，或  wps-copy --gui
   命令行      wps-copy --list   查看最近文档
               wps-copy 3        复制第 3 个
   全局热键    Ctrl+Alt+C         （可改，见 ~/.config/wps-clip-bridge/config.ini）

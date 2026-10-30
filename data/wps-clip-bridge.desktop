@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=WPS 最近文档复制
-Name[en]=WPS Recent Documents Copy
+Name=WPS 最近文档
+Name[en]=WPS Recent Documents
 GenericName=复制 WPS 文档到剪贴板
 GenericName[en]=Copy WPS document to clipboard
 Comment=选中 WPS 最近文档里的文件，直接放进剪贴板，可在桌面和微信里粘贴

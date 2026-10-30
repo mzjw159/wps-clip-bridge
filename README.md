@@ -1,114 +1,134 @@
-# wps-clip-bridge
+<div align="center">
 
-让 WPS for Linux 里的文档能正常复制、粘贴到桌面和微信。
+<img src="data/wps-file.svg" width="88" height="88" alt="">
 
----
+# WPS 最近文档
 
-## 它解决什么问题
+在银河麒麟、深度等 Linux 桌面上，把 WPS 里的文档**一步放进剪贴板**，
+到桌面、微信、邮件客户端直接 `Ctrl+V`。
 
-在 Windows 上，WPS 文档列表里右键「复制」，然后去桌面或微信按 `Ctrl+V`，文件就过去了。
-在银河麒麟（UKUI / Wayland 会话）上，同一个按钮点下去，到哪儿粘贴都是灰的。
+[![Release](https://img.shields.io/github/v/release/mzjw159/wps-clip-bridge?display_name=tag&sort=semver)](https://github.com/mzjw159/wps-clip-bridge/releases/latest)
+[![License](https://img.shields.io/github/license/mzjw159/wps-clip-bridge)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Kylin%20V10%20%7C%20Debian%20%7C%20Ubuntu-2f6f4e)](#兼容性)
+[![Python](https://img.shields.io/badge/python-3.8%2B-3776ab)](#开发)
 
-原因不是配置问题，是 WPS 那个按钮在 Linux 版里**没有实现**：
+[功能](#功能) · [安装](#安装) · [使用](#使用) · [配置](#配置) · [常见问题](#常见问题) · [开发](#开发)
 
-```
-CLIPBOARD 持有者：Qt Selection Owner for wpsoffice
-对外声明的格式：  TARGETS / MULTIPLE / TIMESTAMP / SAVE_TARGETS
-逐格式盲请求 12 种（text/uri-list、x-special/*、UTF8_STRING…）：全部为空
-扫描 X 服务器 1~14000 号原子，找 WPS 私有通道：无
-```
+</div>
 
-也就是说它只「占住」了剪贴板，一个字节的文件数据都没写进去，也没有藏到别的地方。
-数据从未离开 WPS 进程，外部做格式转换、做中转都无从下手 —— 这是死路。
+![界面截图](docs/screenshot.png)
 
-所以本工具**绕开那个按钮**：直接读取 WPS 自己的最近文档记录，把文件作为真正的
-文件对象放进剪贴板。桌面、微信、邮件客户端都能直接粘贴。
+## 为什么需要它
 
-（顺带它也修另一类问题：某些文件管理器/代理复制文件时漏写 `text/uri-list`，
-或者把 `copy` 头行写进了 `text/uri-list`，导致桌面端解析失败、粘贴变灰。）
+在 Windows 上，WPS 文档列表里右键「复制」，去桌面或微信按 `Ctrl+V`，文件就过去了。
+在 Linux 上，同一个按钮点下去，到哪儿粘贴都是灰的。
 
----
+这不是配置问题，是那个按钮在 WPS for Linux 里**没有实现**：它只声明剪贴板的
+所有权，一个字节的文件数据都没写进去，也没有藏到别处 —— 数据从未离开 WPS 进程，
+外部做格式转换、做中转都无从下手。
+
+所以本工具**绕开那个按钮**：直接读 WPS 自己的最近文档记录，把文件作为真正的文件
+对象（`text/uri-list`）放进剪贴板。详细取证过程见 [docs/DESIGN.md](docs/DESIGN.md)。
+
+## 功能
+
+- **三种入口**：全局热键、图形窗口、命令行，按习惯挑一个
+- **多选与拖拽**：`Ctrl` / `Shift` 多选后一次复制，也可以直接把行拖到微信窗口
+- **一个常驻服务**持剪贴板：窗口关了、关了应用，剪贴板里的文件还在
+- **按时间分组**（今天 / 昨天 / 近 3 天 …），带搜索、类型识别、文件大小
+- **设置可调**：换热键、主题（跟随系统/浅色/深色）、列表条数、关闭收托盘、
+  复制后自动收起、开机自启
+- **托盘图标自绘**：单击唤回窗口，最小化到任务栏后也点得出来
+- **零额外依赖**：`python-xlib` 已打进包里，双击安装、离线 `dpkg -i` 都能用
 
 ## 安装
 
-从 [Releases](https://github.com/mzjw159/wps-clip-bridge/releases) 下载最新的
-`wps-clip-bridge_x.y.z_all.deb`（同时提供 `SHA256SUMS` 校验），然后三种方式任选：
+### 从 Release 安装（推荐）
+
+到 [Releases](https://github.com/mzjw159/wps-clip-bridge/releases/latest) 下载
+`wps-clip-bridge_x.y.z_all.deb` 和 `SHA256SUMS`，任选一种装法：
 
 ```sh
-sudo apt install ./dist/wps-clip-bridge_1.6.0_all.deb   # 命令行
+sudo apt install ./wps-clip-bridge_*_all.deb   # 推荐，会自动补依赖
 ```
 
-- **双击** .deb 文件，用系统的安装器（麒麟上是「安装器 / kylin-installer」）；
-- 或者命令行 `sudo apt install ./wps-clip-bridge_*_all.deb`；
-- 或者离线时 `sudo dpkg -i wps-clip-bridge_*_all.deb`。
+- 双击 `.deb`，用系统安装器（麒麟上是「安装器 / kylin-installer」）；
+- 离线时 `sudo dpkg -i wps-clip-bridge_*_all.deb`。
 
-从 1.4.1 起这三种方式**都不需要额外装任何东西**：`python-xlib` 已经打包在
-程序内部（系统里装了 `python3-xlib` 时优先用系统的），剩下的依赖
-`python3-gi` / `gir1.2-gtk-3.0` 是任何 GTK 桌面本来就会有的。
-`dpkg -i` 也不用再补依赖。
+校验下载：
 
-装完 **不需要重启电脑**，执行一次即可开始使用：
+```sh
+sha256sum -c SHA256SUMS
+```
+
+装完**不用重启**，启动一次即可（之后开机会自动运行）：
 
 ```sh
 wps-copy --start
 ```
 
-（后台服务同时设为登录自启，以后开机会自动运行。）
+> **装过手工部署的旧版本？** 先跑一次 `wps-copy --migrate`，清掉旧的自启项和
+> 残留进程，避免两套程序抢剪贴板和热键。
 
-### 如果你是之前手工部署过的
-
-先跑一次迁移，清掉旧的自启项和残留进程，避免两套程序抢剪贴板和热键：
+### 从源码构建
 
 ```sh
-wps-copy --migrate
+git clone https://github.com/mzjw159/wps-clip-bridge.git
+cd wps-clip-bridge
+./build.sh                 # 产出 dist/wps-clip-bridge_<版本>_all.deb
+sudo apt install ./dist/wps-clip-bridge_*_all.deb
 ```
 
----
+只需要 `dpkg-deb` 和 `gzip`，不需要 `debhelper` / `fakeroot`。
+
+### 卸载
+
+```sh
+sudo apt remove wps-clip-bridge
+```
+
+配置和日志不会自动删，要彻底清理再删这两个目录：
+
+```sh
+rm -rf ~/.config/wps-clip-bridge ~/.local/state/wps-clip-bridge
+```
 
 ## 使用
 
-三个入口，按习惯挑一个。
-
 ### 1. 全局热键（最快）
 
-按 `Ctrl+Alt+C` → 弹出最近文档列表 → **双击**要的那一行 → 切到桌面或微信按 `Ctrl+V`。
+按 `Ctrl+Alt+C` → 弹出最近文档列表 → **双击**要的那一行 → 切到目标程序按 `Ctrl+V`。
 
-窗口卡在后台时再按一次热键，会把已有窗口提到前面，不会重复开。
+窗口在后台时再按一次热键，会把已有窗口提到前面，不会重复开窗口。
 
-另一组热键 `Ctrl+Shift+C` 更省事：**不弹窗**，直接把最近一个文档放进剪贴板，
-适合「就复制刚才那个」的场景。复制完会弹一条桌面通知告诉你复制的是哪个文件 ——
-这条路径没有窗口也没有状态栏，通知就是你唯一的反馈。
+`Ctrl+Shift+C` 更省事：**不弹窗**，直接把最近一个文档放进剪贴板，适合「就复制刚才
+那个」。复制完会弹一条桌面通知告诉你复制的是哪个文件。
 
-> `Ctrl+Shift+C` 在终端、VS Code 这类程序里常被用作「复制」，全局热键会优先
-> 截获它（终端里按了没反应就是这个原因）。介意的话在设置里换成
-> `Ctrl+Shift+Alt+C` 之类。两组键都能改。
+> `Ctrl+Shift+C` 在终端、VS Code 里常被用作「复制」，全局热键会优先截获它。介意
+> 的话在设置里换成 `Ctrl+Shift+Alt+C` 之类，两组键都能改。
 
 ### 2. 图形窗口
 
-应用菜单 →「WPS 最近文档复制」，或：
+应用菜单 →「WPS 最近文档」，或：
 
 ```sh
 wps-copy --gui
 ```
 
-窗口里有搜索框、刷新、以及 **「浏览本地文件…」**（支持多选）——
-列表里没有的文件（比如从没在 WPS 里打开过的）可以直接选。
+窗口里有搜索、刷新、**「浏览本地文件…」**（支持多选，选列表里没有的文件）。
 
-**一次发多个文件**，有两种方式：
+**一次发多个文件**：
 
-- **多选再复制**：`Ctrl` 点选、`Shift` 连选（或 `Ctrl+A` 全选），
-  然后按 `Ctrl+C`、双击其中任意一行、或点「复制 N 个文件」。
-- **直接拖出去**：把选中的行拖到微信聊天窗口、桌面或文件管理器，
-  松手即发送/复制，省掉「复制 → 切窗口 → 粘贴」三步。
-  拖拽会在光标下显示文件类型图标，落点应用收到的是标准的 `text/uri-list`。
+- 多选后按 `Ctrl+C`、双击任意一行，或点「复制 N 个文件」；
+- 或者直接把选中的行**拖到**微信聊天窗口、桌面、文件管理器 —— 落点应用收到的是
+  标准 `text/uri-list`，省掉「复制 → 切窗口 → 粘贴」三步。
 
 分组标题（今天 / 昨天 / …）只是分隔，不参与选中，`Ctrl+A` 也不会把它们算进去。
 
-**复制是在后台线程里做的**，点下去界面不会僵住：状态栏左边会转一个小进度圈，
-按钮暂时变成「正在复制…」，期间你照样能搜索、改选、折叠分组。连点几次也没问题
-——只有最后一次的结果会显示出来，慢的那次不会回来把状态盖掉。
+复制在后台线程里做，点下去界面不会僵住：状态栏左边转进度圈，按钮暂时变成「正在
+复制…」，期间照样能搜索、改选。连点几次也只会显示最后一次的结果。
 
-标题栏右上角的 **齿轮按钮** 打开设置窗口（详见下面「设置」一节）。
+标题栏右上角的 **齿轮** 打开设置。
 
 ### 3. 命令行
 
@@ -120,484 +140,174 @@ wps-copy 报告            # 复制文件名含「报告」的
 wps-copy -f a.pdf b.doc # 直接指定文件，可多个
 ```
 
-其它：
+| 命令 | 作用 |
+|---|---|
+| `wps-copy --start` / `--stop` | 启动 / 停止后台服务 |
+| `wps-copy --status` | 服务、热键、窗口的运行状态 |
+| `wps-copy --doctor` | 自检：数据源命中数、依赖、会话类型、进程 |
+| `wps-copy --migrate` | 清理旧的手工部署 |
 
-```sh
-wps-copy --start        # 启动后台服务
-wps-copy --stop         # 停止后台服务
-wps-copy --status       # 看服务 / 热键 / 窗口的状态
-wps-copy --doctor       # 自检：数据源命中数、依赖、会话类型
-wps-copy --migrate      # 清理旧的手工部署
-```
+## 配置
 
-### 关于云文档
-
-WPS 云文档在本地通常留有一份缓存副本，这些也会出现在列表里，类型列标记为「云」。
-纯在线的、本地没有任何落盘文件的文档无法复制 —— 没有文件对象就没有可粘贴的东西。
-
----
-
-## 数据从哪来：WPS 升级了怎么办
-
-Office.conf 是 **WPS 内部私有格式，不是公开接口**。它哪天把 `RecentFiles` 改个名、
-把转义换个写法，只认键名的解析就会静默返回空列表 —— 这是这类工具的先天风险。
-所以最近文档分三层取，任何一层有收获就用：
-
-| 层 | 做法 | 抗什么 |
-|---|---|---|
-| 1. 结构化 | 按键名 `wps\RecentFiles\files\N\path=` 解析 | 正常情况，能拿到序号 |
-| 2. 通用扫描 | 同一个文件里，凡是「值像被转义的绝对路径、且指向真实文档」的键值对全部收下 | **键名/层级被改名** |
-| 3. 兜底源 | 主源一条都读不出时，改用 GTK 的 `recently-used.xbel` 和 `~/文档/WPS Cloud Files` 里最近改过的文档 | 配置彻底读不出来 |
-
-配置文件本身也有兜底：`~/.config/Kingsoft/Office.conf`、`~/.config/kingsoft/Office.conf`、
-`~/.config/Kingsoft/office.conf` 都试。
-
-**最坏情况**（WPS 把值改成加密/base64，连路径形态都没有）三层都无能为力，
-但这时不会静默：状态栏会说「WPS 的配置里没解析出任何文档路径 —— 多半是 WPS
-升级后改了格式」，并把 tooltip 里的明细和 `wps-copy --doctor` 指给你。
-
-判断当前机器到底走的哪一层：
-
-```sh
-wps-copy --doctor
-```
-
-它会打印会话类型（X11 / Wayland）、依赖、配置文件的命中数
-（`结构化 35 条 / 通用扫描 35 条`）、兜底源是否存在、三个后台进程的状态。
-把这个输出发出来，基本能定位所有「列表是空的」问题。
-
----
-
-## 把安装包发给别人
-
-可以。**直接双击就行**，不用教对方敲命令。
-
-包是 `Architecture: all` 的纯 Python，amd64 / arm64 通用。唯一两个「可能
-没有」的依赖 `python3-gi`、`gir1.2-gtk-3.0` 是任何图形桌面自带的东西，
-`python-xlib` 已经打进包里了 —— 所以无论双击、`apt install` 还是离线
-`dpkg -i`，都不会出现「装完打不开」。
-
-对方机器上需要满足：
-
-- 装的是 **WPS for Linux**（`~/.config/Kingsoft/Office.conf` 存在），且至少打开过一个文档；
-- 桌面是 X11 或 Wayland（Wayland 下通过 XWayland 工作，见「已知限制」）；
-- 有 `~/.config` 写权限（普通用户都有）。
-
-装好后让对方跑一次 `wps-copy --doctor`，把输出对一下「解析」那几行的条数，
-就知道他那边是不是和你的效果一致。
-
----
-
-## 设置
-
-窗口标题栏右上角的齿轮按钮，或托盘菜单里的「设置…」。
-
-| 分组 | 项目 | 说明 |
-|---|---|---|
-| 全局快捷键 | 唤起窗口 / 复制最近文档 | 点按钮后**直接按下组合键**即可录入，不需要记格式；`Delete` 清空，`Esc` 取消。至少带一个修饰键 |
-| 外观 | 主题 | 跟随系统 / 浅色 / 深色，改完立即生效 |
-| 外观 | 列表最多显示 | 20–500 条 |
-| 窗口与托盘 | 关闭时收进托盘 | 点 ✕ 或按 `Esc` 只隐藏，不退出程序 |
-| 窗口与托盘 | 复制后自动收起 | 复制成功就把窗口收起来，不打断你粘贴 |
-| 窗口与托盘 | 启动时待在托盘 | 开机/启动时不弹窗，只在托盘待命 |
-| 窗口与托盘 | 复制成功发通知 | 走 `notify-send`；窗口收起时、以及用快捷键复制时，这是唯一的结果反馈 |
-| 启动 | 开机自动启动 | 写 `~/.config/autostart/` 的屏蔽项，不动 `/etc` 下的系统文件 |
-
-托盘图标：**单击（或双击、中键）它就把窗口叫出来**，右键是菜单：「显示窗口」
-「复制最近文档」「设置…」「退出」。
-
-窗口叫得回来，不管是收进托盘（只是隐藏）还是缩到任务栏（被窗管最小化）：
-后者在 KWin 系的桌面上有个坑 —— `deiconify()` 只是给窗管发个异步请求，窗口
-真出来之前紧跟着的 `present()` 会被当成「对还在任务栏里的窗口」的请求丢掉，
-于是点了像没点。所以最小化时会按拍重试，并补一条 EWMH `_NET_ACTIVE_WINDOW`
-激活请求（等同于你从任务栏点窗口），窗口一出来就收手。
-
-窗口本身是系统原生边框：拖边缘、拖四角都能改大小，双击标题栏最大化，
-位置和大小会记住，下次点托盘回来还是原处（换过显示器会自动挪回可见区域）。
-
-托盘图标是程序自己按 StatusNotifierItem 规范挂上去的，不是用 libappindicator：
-那一层把左键固定成弹菜单，点半天窗口不出来；而且它只把图标路径当图标名交给
-面板，面板按图标主题一查就落空，于是显示成系统默认的齿轮图标。自己实现之后，
-左键直接是「显示窗口」，图标同时给主题名和 `IconPixmap` 像素，谁都不挑。
-
-如果桌面环境既不支持 StatusNotifier 也不支持 XEmbed 托盘，程序会自动退化为
-「关闭即退出」，避免窗口消失后无处唤回。
-
----
-
-## 配置文件
-
-上面的设置都会写进 `~/.config/wps-clip-bridge/config.ini`，也可以手动改：
+图形界面的设置会写进 `~/.config/wps-clip-bridge/config.ini`，也可以手改：
 
 ```ini
 [hotkey]
 enabled = true
 combo = <Control><Alt>c          ; 唤起窗口；也接受 Ctrl+Alt+C 这种写法
 copy_enabled = true
-copy_combo = <Control><Alt>v     ; 直接复制最近文档
+copy_combo = <Control><Shift>c   ; 直接复制最近文档
 
 [bridge]
 poll = 0.3                       ; 剪贴板轮询间隔（秒）
 
 [ui]
-limit = 80                       ; 列表最多显示多少条
+limit = 80                       ; 列表最多显示多少条（20–500）
 theme = system                   ; system / light / dark
 close_to_tray = true             ; 关闭时收进托盘
 hide_after_copy = true           ; 复制成功后自动收起窗口
 start_hidden = false             ; 启动时待在托盘
 notify_on_copy = true            ; 复制成功发通知
-tray_backend = auto              ; auto / indicator / statusicon
 ```
 
-手工改完热键后，在设置窗口里点一次保存，或 `wps-copy --stop && wps-copy --start`，
-让热键进程重新抓取组合键。
+改完热键后，在设置窗口点一次保存，或 `wps-copy --stop && wps-copy --start`，让热键
+进程重新抓取组合键。
 
----
+运行期文件都走 XDG：
 
-## 卸载
+| 用途 | 位置 |
+|---|---|
+| 剪贴板请求、锁文件 | `$XDG_RUNTIME_DIR/wps-clip-bridge/`（注销自动清理） |
+| 日志 | `~/.local/state/wps-clip-bridge/` |
+| 配置 | `~/.config/wps-clip-bridge/config.ini` |
 
-```sh
-sudo apt remove wps-clip-bridge
-```
+## 常见问题
 
-`/etc/xdg/autostart` 里的自启项、`/usr/share` 下的文件随包一起删除。
-你改过的配置和日志不会自动删，需要彻底清理就手动删这两个目录：
+<details>
+<summary><b>列表是空的</b></summary>
 
-```sh
-rm -rf ~/.config/wps-clip-bridge ~/.local/state/wps-clip-bridge
-```
+先跑 `wps-copy --doctor`，看三层数据源的命中数。一条都没有，多半是 WPS 升级改了
+`Office.conf` 的格式，见 [docs/DATA-SOURCE.md](docs/DATA-SOURCE.md)。
+</details>
 
----
+<details>
+<summary><b>复制了，但粘贴出来还是灰的</b></summary>
 
-## 从源码构建
+确认复制之后**没有**再碰过 WPS 的「复制」按钮 —— 那是空操作，一点就把剪贴板清空，
+覆盖掉刚放进的文件。
+</details>
 
-```sh
-cd ~/coding/wps-clip-bridge
-./build.sh              # 输出到本项目 dist/
-./build.sh --check      # 额外打印包内容并校验 desktop 文件语法
+<details>
+<summary><b>托盘图标是系统默认齿轮</b></summary>
 
-OUT=/tmp/out ./build.sh # 换个输出目录
-```
-
-只依赖 `dpkg-deb` 和 `gzip`，不需要 `debhelper` / `fakeroot`（用 `--root-owner-group`）。
-
-### 换图标
-
-图标只有一个源文件：`data/wps-file.svg`。换的时候不用碰别的：
-
-```sh
-cp 新图标.svg data/wps-file.svg     # 1) 覆盖，文件名保持不变
-./tools/render-icons.py             # 2) 渲染 48/64/128/256/512 + 500px 主图
-./build.sh                          # 3) 重新打包
-```
-
-脚本会打印每一档的内容占比，正常都在 83% 左右：
-
-```
-尺寸     内容占比     文件
-48     83%      data/icons/hicolor/48x48/apps/wps-file.png  ✔
-64     84%      data/icons/hicolor/64x64/apps/wps-file.png  ✔
-...
-```
-
-**83% 是怎么来的。** SVG 的 viewBox 是 `0 0 1024 1024`。图形如果铺满整个
-viewBox（最初那版就是），渲染出来的图标在面板和任务栏里会比邻居大一圈 ——
-workbuddy 这类系统图标的内容只占画布 `40/48 ≈ 83%`。所以现在 SVG 最外层套了：
-
-```xml
-<g transform="translate(87.04,87.04) scale(0.83)">
-```
-
-换新图后先跑一次 `./tools/render-icons.py --check`（只看不改）判断：
-
-- 占比已经在 83% 附近 → 不用动 SVG，直接渲染；
-- 明显偏大或偏小 → 调 `scale()` 与 `translate()`，公式是
-  `translate = 1024 × (1 − scale) / 2`。
-
-**为什么同一套图要装两份。** 名字分别是 `wps-file` 和 `wps-clip-bridge`。
-后者是给麒麟安装器和软件中心用的 —— 它们按**包名**去图标主题里查
-（`QIcon::fromTheme('wps-clip-bridge')`），只装前者就显示成系统默认的齿轮。
-`build.sh` 会自动装两份，换图标时不用管。
-
-**换完没生效？** 是缓存：
+面板没认到图标，清一下缓存并从托盘菜单「退出」再打开：
 
 ```sh
 sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor
-rm -rf ~/.cache/ukui ~/.cache/icon-cache.kcache     # 面板自己的图标缓存
+rm -rf ~/.cache/ukui ~/.cache/icon-cache.kcache
 ```
+</details>
 
-另外，托盘和任务栏里的旧图标会一直用到进程重启 —— 从托盘菜单「退出」再打开。
+<details>
+<summary><b>热键按了没反应</b></summary>
 
-### 发版流程
+多半是被别的程序占用了：抢不到时会弹通知并写日志，在设置里换一个组合键。另外全局
+热键只在 X11 / XWayland 应用前台时有效，见「已知限制」。
+</details>
 
-**一条命令（推荐）**：
+更多症状和日志关键字：[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)。
 
-```sh
-# 1. 改版本号：core.py 的 VERSION、debian/control 的 Version、
-#    debian/changelog 顶部加一段（结尾 " -- 名字 <邮箱>  日期" 那行不能省）
-# 2. commit 之后：
-./tools/release.sh                        # 构建 + 校验和 + 说明 + 推 tag + 建 Release
-./tools/release.sh --title "v1.7.2 · 一句话"   # 自定义 Release 标题
-./tools/release.sh --draft                # 先建草稿，网页上确认后再 Publish
-./tools/release.sh --dry-run              # 只构建 + 生成说明，不推送不发版
-```
+## 已知限制
 
-脚本干的事，和下面手工那四步一一对应：核对 `control` 与 `changelog` 版本一致 →
-`./build.sh` → 重算 `dist/SHA256SUMS` → 从 `debian/changelog` 抽当前版本生成
-`dist/RELEASE-<版本>.md` → 打 tag 并推送 → `gh release create` 带上 `.deb` 与
-`SHA256SUMS`。Release 已存在时改成 `gh release edit` + `gh release upload --clobber`，
-所以同一条命令重跑是安全的。
+- **热键只在 X11 / XWayland 应用前台时有效。** WPS、微信、文件管理器都是 XWayland
+  客户端，日常够用；焦点在 Wayland 原生应用（某些 GTK4 程序）时，X11 的 `grab_key`
+  收不到按键。这是 X11 键盘抓取的固有限制。
+- **`Ctrl+Alt+C` 可能被其他程序占用**，抢不到会提示，换一个即可。
+- **只列本机存在文件。** 纯云端、本地无落盘文件的文档没有可复制的对象。
+- **Wayland 原生会话**下靠 XWayland 工作，剪贴板与热键能力取决于合成器。
 
-前置：`gh` 装好并登录过一次 ——
+## 兼容性
 
-```sh
-gh auth login        # 选 GitHub.com → 浏览器登录，粘一次设备码即可
-gh auth status       # 确认已登录
-```
+| 项目 | 说明 |
+|---|---|
+| 系统 | 银河麒麟桌面版 V10（UKUI）、Debian / Ubuntu（glibc ≥ 2.31） |
+| 架构 | `Architecture: all`，纯 Python，amd64 / arm64 通用 |
+| 桌面 | X11 直接可用；Wayland 会话经 XWayland |
+| 运行时 | Python 3.8+、GTK3、`python3-xlib`（已内置兜底） |
 
-`gh` 是单个静态二进制（arm64 版解压即用，不依赖 glibc 版本），放在
-`~/.local/bin/gh` 即可，不需要 sudo 装包：
-
-```sh
-curl -L -o gh.tar.gz https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_arm64.tar.gz
-tar xzf gh.tar.gz --no-same-owner --no-same-permissions gh_2.103.3_linux_arm64/bin/gh
-install -m 755 gh_2.103.3_linux_arm64/bin/gh ~/.local/bin/gh
-```
-
-`release.sh` 会自己找 `gh`（PATH 里没有 `~/.local/bin` 也能找到）。
-`gh auth login` 若卡在 `Bad Gateway`，是代理的问题不是授权失败 —— 换一个能通
-`github.com` 的代理重试即可（`api.github.com` 通不代表登录能成）。
-
-**手工四步**（没有 gh、或想逐步确认时）：
-
-1. **改版本号**：`src/wpsclip/core.py` 的 `VERSION`、`debian/control` 的
-   `Version`，再往 `debian/changelog` 顶部加一段（结尾那行
-   ` -- 名字 <邮箱>  日期` 不能省，`build.sh` 只认 `Version:`）。
-2. **打包**：`./build.sh --check` → 产出 `dist/wps-clip-bridge_<版本>_all.deb`；
-   重算校验和 `(cd dist && sha256sum wps-clip-bridge_<版本>_all.deb > SHA256SUMS)`。
-   安装包不进代码仓库历史以外的任何地方，`dist/` 只留最新那一个。
-3. **推代码**：`git commit` → `git tag v<版本>` → `git push origin master --tags`。
-   `origin` 是 SSH 地址（`git@github.com:mzjw159/wps-clip-bridge.git`），
-   靠 `~/.ssh/id_ed25519` 认证，不需要 token。
-4. **建 Release**：打开
-   <https://github.com/mzjw159/wps-clip-bridge/releases/new>，tag 选**已有**的
-   `v<版本>`（别在网页上新建 tag，否则会和本地那个分叉），标题用
-   `v<版本> · 一句话`，说明抄 `debian/changelog` 里那一段，附件传 `.deb` 和
-   `SHA256SUMS`，然后 Publish。
-
-第 4 步是独立的：`git push --tags` 只推 tag 这个引用，**Release 是 GitHub 上
-另一个对象**（带说明和附件），只能用网页或 GitHub API 建，`git push` 变不出来。
-
----
+主要在**银河麒麟桌面版 V10 SP1（UKUI，aarch64）**上开发和验证；其他 Debian 系
+桌面环境没有逐一测试过，遇到问题欢迎开 issue。
 
 ## 开发
 
-### 不装包，直接从源码跑
-
-所有模块都能 `-m` 运行，把 `src/` 加进 `PYTHONPATH` 即可：
-
-```sh
-cd ~/coding/wps-clip-bridge
-export PYTHONPATH=$PWD/src
-
-python3 -m wpsclip.recent        # 只做一件事：打印解析出的最近文档列表
-python3 -m wpsclip.cli --list    # 命令行清单
-python3 -m wpsclip.gui           # 图形窗口
-python3 -m wpsclip.bridge        # 剪贴板服务（前台跑，日志直接看）
-python3 -m wpsclip.daemon        # 看护进程（依次拉起 bridge + hotkey）
-```
-
-依赖：`python3-gi` + GTK3（图形窗口）、`python3-xlib`（X11 selection，已随包内置一份在 `src/wpsclip/_vendor/`，系统装了就用系统的）。
-代码兼容 Python 3.8+（麒麟 V10 自带 3.8）。
-
-### 跑测试
-
-纯函数部分有单元测试（`tests/`，150 个用例），不需要图形界面，也不碰你的
-真实配置（每个用例都在临时目录里跑）：
-
-```sh
-python3 -m unittest discover -s tests          # 全跑，约 1 秒
-python3 -m unittest discover -s tests -v       # 逐个用例
-python3 -m unittest tests.test_service -v      # 只跑复制编排
-python3 -m unittest tests.test_recent -v       # 只跑解析与多源兜底
-python3 -m unittest tests.test_hotkey -v       # 只跑热键反馈
-python3 -m unittest tests.test_vendor -v       # 只跑内置依赖自检
-```
-
-覆盖 `unesc()` 的「2~4 位十六进制」边界、`parse_uris()` 的百分号解码、
-`bucket_of()` 的时间分桶、配置的 mtime 热重载、开机自启开关，以及复制链路
-的路径整理、请求发布、等待确认和异步回调（不需要 X 连接）。
-
-> 动 `recent.py` 的解析规则之前先读 `tests/test_recent.py`：
-> 里面每条用例都对应一个真实踩过的坑，改坏了会立刻红。
-
-### 一个必须知道的开发坑
-
-`src/wpsclip/service.py` 的 `exe_for()` **优先使用 `/usr/bin/` 下已安装的入口**，
-找不到才退回 `python -m`。也就是说：
-
-> 只要系统里装过 1.0.0 的 deb，源码树里改的 `cli` / `gui` 会生效（由你直接执行），
-> 但 `ensure_bridge()` 拉起的**后台服务仍然是 `/usr/bin/wps-clip-bridge`**（安装的那份）。
-
-所以改 `bridge.py` / `hotkey.py` / `daemon.py` 时要二选一：
-
-```sh
-wps-copy --stop                                  # 先停掉已安装的后台
-PYTHONPATH=$PWD/src python3 -m wpsclip.bridge    # 前台跑改动过的服务
-```
-
-或者改完直接重装：`sudo apt install --reinstall ./dist/wps-clip-bridge_*.deb`。
-
-### 关键调试入口
-
-```sh
-python3 -m wpsclip.recent      # 确认 Office.conf 解析对不对（最常见的出错点）
-
-PYTHONPATH=src python3 -c "from wpsclip.core import clipboard_has; print(clipboard_has('/任意/存在的/文件'))"
-```
-
-`recent.py` 里那个 `\x` 变长转义正则（`{1,4}`、遇非十六进制即停）是全项目最容易踩坑的
-一行，动它之前先看下面「为什么读 `Office.conf`」那节。
-
----
-
-## 目录结构
-
-源码树：
+### 目录结构
 
 ```
 wps-clip-bridge/
 ├── src/wpsclip/             Python 包
 │   ├── core.py              路径、配置、日志、单实例锁、剪贴板读取
-│   ├── bootstrap.py         入口脚本的友好启动（缺依赖给人话）
 │   ├── recent.py            最近文档：三层解析 + 兜底源 + 自检诊断
-│   ├── _vendor/             内置的 python-xlib 与 six（系统没装时兜底）
-│   ├── bridge.py            常驻剪贴板服务
+│   ├── bridge.py            常驻剪贴板服务（selection 持有者）
 │   ├── service.py           服务编排：确保在跑、异步复制、确认结果
-│   ├── cli.py               命令行 wps-copy
-│   ├── gui.py               图形窗口 wps-copy-gui
+│   ├── gui.py               图形窗口
 │   ├── settings.py          设置窗口
 │   ├── tray.py              托盘图标（三条后端，按可靠性回退）
 │   ├── sni.py               自己实现的 StatusNotifierItem
-│   ├── hotkey.py            全局热键 wps-copy-hotkey
-│   └── daemon.py            看护进程 wps-clip-bridge-daemon
-├── bin/                     5 个可执行入口（薄壳，转手给上面的模块）
-├── data/                    菜单项、自启项、图标、man page
-├── tools/                   辅助脚本（render-icons.py：从 SVG 出各尺寸 PNG）
+│   ├── hotkey.py            全局热键
+│   ├── daemon.py            看护进程（拉起并守护 bridge + hotkey）
+│   └── _vendor/             内置的 python-xlib 与 six
+├── bin/                     5 个可执行入口（薄壳）
+├── data/                    菜单项、自启项、图标、man page、AppStream 元数据
+├── tools/                   render-icons.py、release.sh
 ├── tests/                   单元测试（不需要图形环境）
 ├── debian/                  control、维护脚本、copyright、changelog
-├── dist/                    打包产物（含最新 deb 与 SHA256SUMS）
-├── build/                   构建中间目录，每次构建重建，可随时删
-├── build.sh
-└── .gitignore
+└── docs/                    设计取舍、数据来源、排障、维护手册
 ```
 
-安装后：
-
-```
-/usr/bin/wps-copy                    命令行
-/usr/bin/wps-copy-gui                图形窗口
-/usr/bin/wps-copy-hotkey             热键守护
-/usr/bin/wps-clip-bridge             剪贴板服务
-/usr/bin/wps-clip-bridge-daemon      后台守护（自启的就是它）
-/usr/lib/python3/dist-packages/wpsclip/
-/usr/share/applications/wps-clip-bridge.desktop
-/usr/share/icons/hicolor/{48x48,64x64,128x128,256x256,512x512,scalable}/apps/wps-file.*
-/usr/share/icons/hicolor/{...}/apps/wps-clip-bridge.*   同上图标，按包名的别名
-/usr/share/pixmaps/wps-file.{png,svg}                   只认 pixmaps 的老面板
-/usr/share/metainfo/wps-clip-bridge.metainfo.xml        AppStream 元数据
-/usr/share/man/man1/wps-copy.1.gz
-/etc/xdg/autostart/wps-clip-bridge.desktop
-```
-
-图标为什么装两份、还放 pixmaps：不同组件查图标的方式不一样 —— 桌面环境按
-`.desktop` 的 `Icon=wps-file` 查主题、麒麟安装器/软件中心按**包名**
-（`wps-clip-bridge`）查 `QIcon::fromTheme()`、个别老面板只扫 `/usr/share/pixmaps`。
-同一套图标按这几个名字/目录各放一份，才能都命中，否则会显示成系统通用图标。
-
-运行期文件走 XDG，不写死家目录：
-
-| 用途 | 位置 |
-|---|---|
-| 锁文件、复制请求 | `$XDG_RUNTIME_DIR/wps-clip-bridge/`（注销自动清理） |
-| 日志 | `~/.local/state/wps-clip-bridge/`（daemon / bridge / hotkey / gui 各一份） |
-| 配置 | `~/.config/wps-clip-bridge/config.ini` |
-
----
-
-## 几个设计上的取舍
-
-**为什么必须有一个常驻进程？**
-
-X11 的 selection（剪贴板）由**写入方**持有，写入方退出，剪贴板内容就没了。
-所以工具窗口不能自己当持有者，否则窗口一关就复制失效。
-常驻的 `bridge` 负责长期持有，窗口只负责「告诉它复制哪个」。
-
-**为什么用 flock 而不是 `pgrep -f`？**
-
-`pgrep -f` 会匹配到命令行里恰好含同样字样的其他进程 —— 开发过程中就踩过：
-热键进程把当前 shell 的命令行当成了「GUI 已在运行」，于是永远不弹窗。
-flock 是内核级互斥，不会误判。
-
-**为什么有 `daemon` 这一层？**
-
-登录自启不提供崩溃重启，所以 `daemon` 负责看护 `bridge` 和 `hotkey`，
-子进程异常退出就重启，连续崩溃则指数退避（2s → 30s），免得刷日志烧 CPU。
-它还负责在启动前等 X 就绪 —— 登录自启可能比合成器更早执行。
-
-**为什么复制要放到后台线程？**
-
-复制不是一个纯本地动作：它要先确认剪贴板服务在跑（必要时拉起守护进程，
-冷启动可能要一两秒），再写请求文件、等 `published` 时间戳变化。整条链路
-最长要几秒，而 GTK 主循环被占住时窗口连重绘都做不了——表现就是「点一下
-界面灰掉、鼠标转圈」。
-
-所以 `service.request_copy()` 只负责**同步**语义（命令行、热键进程直接用它，
-阻塞一下无所谓），界面走 `service.copy_async()`：工作线程里跑完整条链路，
-结果用 `GLib.idle_add` 回到主线程再碰控件。界面侧再用一个自增序号作废旧
-回调——连续点两次时，先发后到的结果会被丢掉，状态栏只反映最后一次。
-
-**为什么读 `Office.conf` 而不是调 WPS 的接口？**
-
-WPS 没有提供可用的对外接口。`~/.config/Kingsoft/Office.conf` 是它自己的最近文档
-记录，格式是一个 INI，路径用 `\x` + **2~4 位**十六进制转义。
-
-这里有个坑值得记下来：ASCII 字符也会被转义，比如文件名里的 `2026` 写成
-`\x32\x30\x32\x36`。早期按「定长 4 位」解析会把 `\x32\x30` 吃成一个字符 `0x3230`，
-整条路径变乱码、文件被判为不存在而被过滤掉 —— 表现就是「名字带数字的文件在列表里
-看不到」。现在按「最多 4 位、遇非十六进制字符即停」解析。
-
----
-
-## 已知限制
-
-- **热键只在 X11 / XWayland 应用前台时有效。** WPS、微信、文件管理器都是 XWayland
-  客户端，所以日常够用；但如果当前焦点在 Wayland 原生应用（如某些 GTK4 程序）上，
-  X11 的 `grab_key` 收不到按键。这是 X11 键盘抓取的固有限制，无解。
-- **`Ctrl+Alt+C` 可能被其他程序占用。** 抢不到时会弹一条通知并写进日志，
-  在设置里换一个组合键即可（X 的 GrabKey 冲突只会异步返回 BadAccess，
-  v1.3.0 之前是完全静默的）。
-- **只列本机存在文件。** 纯云端、本地无落盘文件的文档没有可复制的对象。
-- **禁用了 `universe` 源也没关系。** `python3-xlib` 已内置在包里
-  （v1.4.1 起），不需要从源里装。
-
----
-
-## 排障
+### 不装包，直接从源码跑
 
 ```sh
-wps-copy --doctor                     # 先跑这个：数据源/依赖/会话/服务一次看全
-wps-copy --status                     # 三个组件是否都在跑
-tail -n 40 ~/.local/state/wps-clip-bridge/daemon.log
-tail -n 40 ~/.local/state/wps-clip-bridge/bridge.log
+export PYTHONPATH=$PWD/src
+python3 -m wpsclip.recent        # 只做一件事：打印解析出的最近文档
+python3 -m wpsclip.cli --list    # 命令行清单
+python3 -m wpsclip.gui           # 图形窗口
+python3 -m wpsclip.bridge        # 剪贴板服务（前台跑，日志直接看）
+python3 -m wpsclip.daemon        # 看护进程
 ```
 
-`bridge.log` 里这几行有用：
+> 系统里装过旧的 deb 时，`ensure_bridge()` 拉起的后台仍是 `/usr/bin/` 那份安装版，
+> 改 `bridge.py` / `hotkey.py` 前先 `wps-copy --stop`，或者改完直接重装。
 
-- `published copy 1 path(s): [...]` —— 成功把文件放进剪贴板
-- `REQ FILE-URI <- text/uri-list (N bytes)` —— 有应用来取文件了
-- `owner=0x... targets=[...]` —— 剪贴板换了持有者，以及它声明了哪些格式
-- `file-copy detected but no path parsed` —— 认出了是文件复制但解析不出路径
+### 测试
 
-如果粘贴还是灰的，先确认：**复制之后有没有再碰过 WPS 的「复制」按钮**。
-那个按钮是空操作，一点就把剪贴板清空，覆盖掉刚放进的文件。
+193 个用例，不需要图形界面，也不碰你的真实配置（每个用例都在临时目录里跑）：
+
+```sh
+python3 -m unittest discover -s tests        # 全跑，约 2 秒
+python3 -m unittest tests.test_recent -v     # 只跑解析与多源兜底
+```
+
+> 动 `recent.py` 的解析规则之前先读 `tests/test_recent.py`：每条用例都对应一个真实
+> 踩过的坑。
+
+### 发版
+
+```sh
+./tools/release.sh
+```
+
+构建 → 校验和 → 从 changelog 生成发布说明 → 推 tag → `gh release create`。
+完整流程、换图标、`gh` 配置见 [docs/MAINTAINING.md](docs/MAINTAINING.md)。
+
+## 贡献
+
+Issue 和 PR 都欢迎。报问题请附上：
+
+1. `wps-copy --doctor` 的输出；
+2. 系统版本与桌面环境（如 `麒麟 V10 SP1 / UKUI`）；
+3. 相关日志行（`~/.local/state/wps-clip-bridge/*.log`）。
+
+## 许可
+
+[MIT](LICENSE)。内置的 `python-xlib`、`six` 按其原许可（LGPL-2.1 / MIT）分发，
+详见 `debian/copyright`。

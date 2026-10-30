@@ -405,7 +405,7 @@ class SettingsDialog(Gtk.Dialog):
         made.set_xalign(0)
         about.pack_start(made, False, False, 0)
 
-        ver = Gtk.Label(label='WPS 最近文档复制  v%s' % core.VERSION)
+        ver = Gtk.Label(label='WPS 最近文档  v%s' % core.VERSION)
         ver.set_xalign(0)
         ver.get_style_context().add_class('dim-label')
         about.pack_start(ver, False, False, 0)

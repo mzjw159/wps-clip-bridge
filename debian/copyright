@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: wps-clip-bridge
-Source: 本地开发，无公开仓库
+Source: https://github.com/mzjw159/wps-clip-bridge
 
 Files: *
 Copyright: 2026 shuai <shuai@localhost>
