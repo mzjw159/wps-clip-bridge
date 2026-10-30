@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # 生成说明要从 changelog 读历史，完整历史更稳妥
           fetch-depth: 0

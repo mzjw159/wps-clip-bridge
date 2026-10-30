@@ -20,6 +20,7 @@ wps-clip-bridge (1.7.3) unstable; urgency=medium
     那段输出里就有答案），另有功能建议表单、PR 模板（界面类改动要求写手动
     验证步骤），并关掉空白 Issue。
   * README 加 CI 徽章，开发与发版两节改为以 CI 为主、本机脚本为备。
+  * Actions 用 checkout@v5 / upload-artifact@v5，不再触发 Node 20 弃用警告。
 
  -- shuai <shuai@localhost>  Fri, 30 Oct 2026 15:42:00 +0800
 

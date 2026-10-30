@@ -35,7 +35,7 @@ jobs:
             python: "3.12"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 安装依赖
         run: |
@@ -69,7 +69,7 @@ jobs:
         run: ./tools/check-deb.sh dist/wps-clip-bridge_*_all.deb
 
       - name: 上传安装包
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: deb-${{ matrix.os }}
           path: |
