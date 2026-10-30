@@ -1,4 +1,36 @@
 Package: wps-clip-bridge
+Version: 1.10.0
+Architecture: all
+Maintainer: shuai <shuai@localhost>
+Installed-Size: 1160
+Depends: python3 (>= 3.6), python3-gi, gir1.2-gtk-3.0
+Recommends: python3-xlib, gir1.2-appindicator3-0.1 | gir1.2-ayatanaappindicator3-0.1, libnotify-bin
+Suggests: wl-clipboard
+Section: utils
+Priority: optional
+Description: 让 WPS 文档能复制粘贴到桌面和微信
+ WPS for Linux 在文档列表里右键「复制」时只拿下剪贴板所有权，并没有把
+ 任何文件数据写进系统剪贴板，所以粘到桌面、微信时「粘贴」是灰的。
+ 本工具绕开那个按钮：直接读取 WPS 的最近文档记录，把文件作为真正的
+ 文件对象放进剪贴板，同时提供全局热键和图形选择窗口。
+ .
+ 提供三个入口：命令行 wps-copy、图形窗口 wps-copy-gui、全局热键
+ Ctrl+Alt+C，以及负责长期持有剪贴板的常驻后台服务。
+ .
+ python-xlib 已打包在程序内部（系统里装了 python3-xlib 时优先用系统的），
+ 所以只剩桌面环境本来就有的 python3-gi / GTK3 两个依赖：双击安装包、
+ 或者离线 dpkg -i，都能直接装好并运行。
+ .
+ 最近文档有多层解析：先按 WPS 的键名结构化解析，失败时退到
+ 「值像被转义的绝对路径」的通用扫描，再退到 GTK 最近使用记录和
+ 云文档目录，所以 WPS 升级改了内部格式也不会静默变成空列表。
+ 排查问题跑 wps-copy --doctor。
+Filename: pool/main/w/wps-clip-bridge/wps-clip-bridge_1.10.0_all.deb
+Size: 175584
+MD5sum: 3dab32dedfbc174bb895a5c1b2b6344b
+SHA256: 4b395c455fb34c1c26f13114cc1c1f810d9169377820814589557c4303a96474
+
+Package: wps-clip-bridge
 Version: 1.9.0
 Architecture: all
 Maintainer: shuai <shuai@localhost>
