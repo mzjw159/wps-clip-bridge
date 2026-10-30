@@ -317,6 +317,93 @@ class SniSetItemsTest(unittest.TestCase):
 
 
 @_need_gi
+class SniClickTest(unittest.TestCase):
+    """面板点菜单项 → ``Event('clicked')`` → 对应回调。
+
+    id 错一位就会复制错文件，而这种 bug 在界面上完全看不出来（点了有反应，
+    只是复制到了别的文档）。这里把「第 N 项对应哪个回调」钉死。
+    """
+
+    def _item(self):
+        calls = []
+        items = [('显示窗口', lambda: calls.append('show')),
+                 None,
+                 ('a.docx', lambda: calls.append('a')),
+                 ('b.docx', lambda: calls.append('b'))]
+        return sni.SniItem(items, on_activate=lambda: None), calls
+
+    @staticmethod
+    def _drain():
+        # 回调是 GLib.idle_add 排的，没有主循环就手动排空
+        ctx = sni.GLib.main_context_default()
+        while ctx.pending():
+            ctx.iteration(False)
+
+    def test_click_runs_matching_callback(self):
+        # id 从 1 开始依次递增：1=显示窗口, 2=分隔线, 3=a.docx, 4=b.docx
+        item, calls = self._item()
+        item._click(3)
+        self._drain()
+        self.assertEqual(calls, ['a'])
+
+    def test_click_on_separator_does_nothing(self):
+        item, calls = self._item()
+        item._click(2)
+        self._drain()
+        self.assertEqual(calls, [])
+
+    def test_click_unknown_id_does_not_raise(self):
+        item, calls = self._item()
+        item._click(99)
+        self._drain()
+        self.assertEqual(calls, [])
+
+    def test_event_method_dispatches(self):
+        item, calls = self._item()
+        inv = _FakeInvocation()
+        params = mock.Mock(unpack=lambda: (4, 'clicked', mock.Mock(), 0))
+        item._on_menu_call(None, None, None, None, 'Event', params, inv)
+        self._drain()
+        self.assertEqual(calls, ['b'])
+        # 必须应答（应答值就是 None），否则面板那边的右键菜单会一直卡着
+        self.assertIsNone(inv.value)
+        self.assertIsNone(inv.error)
+
+    def test_items_in_menu_match_callbacks(self):
+        # 托盘菜单里「最近文档」那几行在分隔线之后，点第三项要拿到第二份文档
+        item, calls = self._item()
+        self.assertEqual(item._props_of(3)['label'], 'a.docx')
+        self.assertEqual(item._props_of(4)['label'], 'b.docx')
+
+
+@_need_gi
+class TrayCopyPathTest(unittest.TestCase):
+    """托盘点击把路径原样交给上层；上层负责「单路径 / 列表」归一。"""
+
+    def _tray(self, **kw):
+        base = dict(on_show=lambda: None, on_copy=lambda: None,
+                    on_settings=lambda: None, on_quit=lambda: None)
+        base.update(kw)
+        return tray.Tray(**base)
+
+    def test_path_passed_through(self):
+        seen = []
+        self._tray(on_copy_path=seen.append)._copy_path('/x/a.docx')
+        self.assertEqual(seen, ['/x/a.docx'])
+
+    def test_fallback_to_copy_latest(self):
+        # 没配 on_copy_path 时退回「复制最近一个」，不能静默什么都不做
+        hits = []
+        self._tray(on_copy=lambda: hits.append(1))._copy_path('/x/a.docx')
+        self.assertEqual(hits, [1])
+
+    def test_callback_exception_is_swallowed(self):
+        def boom(_p):
+            raise RuntimeError('x')
+        self._tray(on_copy_path=boom)._copy_path('/x/a.docx')   # 不能抛出去
+
+
+@_need_gi
 class TrayBackendTest(unittest.TestCase):
     def _tray(self):
         return tray.Tray(on_show=lambda: None, on_copy=lambda: None,

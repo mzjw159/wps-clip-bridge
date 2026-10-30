@@ -41,6 +41,9 @@
 - **类型/来源筛选**（可叠加）**会记住**，下次打开还是那个视角，一键 `×` 还原
 - **点表头排序**：名称 / 来源 / 类型 / 大小 / 时间 / 文件夹，升序降序三态切换
 - **置顶**：常用的那几个钉在列表最上方，不会被新文件挤下去
+- **列宽会记住**：拖过表头分隔条，下次打开还是你调好的样子
+- **超量提示**：文档太多时只画前 200 条，状态栏明说还有多少更早的没列出，
+  搜索照样覆盖全部
 - **键盘全流程**：`↑↓` 选、`Enter` 复制、`Ctrl+A` 全选、`Ctrl+C` 复制、
   `Ctrl+F` 回到搜索框、`Esc` 清空搜索、`Delete` 移入回收站
   —— 热键唤起后手不用离开键盘
@@ -154,6 +157,15 @@ wps-copy --gui
 `wps-copy <序号>` 仍然是完整的清单。**选择会被记住**，下次打开还是这个视角；
 右边出现的 `×` 一下就能回到全部（状态栏也会写明当前在筛什么，不至于以为文件丢了）。
 
+**列宽可以拖，拖完会记住**：表头之间的分隔条拖一下，下次打开还是这个宽度。
+最后一列（所在文件夹）不记 —— 它是自动吃掉剩余宽度的那一列，记住了反而会把
+窗口大小写死。想回到默认，把分隔条双击一下（GTK 的自动适应）或删掉配置里的
+`col_widths`。
+
+**文档很多时只画前 200 条**：状态栏会写「另有 N 个更早的未列出」，把鼠标停在
+状态栏上能看到完整解释。搜索和筛选跑在**全部**文档上，不受这个上限影响 ——
+所以找早期的文件直接搜名字就行，不用翻页。
+
 **点表头排序**：名称 / 来源 / 类型 / 大小 / 修改时间 / 所在文件夹都能点。
 点一下升序、再点降序、第三下回到默认的按时间分组，方向会标在表头上（`大小 ↓`）。
 手动排序时不按天分组 —— 两套顺序会打架。大小按真实字节数比，`1.0 MB` 与
@@ -245,6 +257,7 @@ notify_on_copy = true            ; 复制成功发通知
 pinned = ["/home/u/常用合同.docx"] ; 置顶的文档（界面里右键设置，一般不用手改）
 filter_type = 表格                ; 上次用的类型筛选，空 = 全部
 filter_source =                   ; 上次用的来源筛选（云端/微信/本地），空 = 全部
+col_widths = {"name": 420}        ; 各列宽度（拖过表头才写；文件夹列不记）
 ```
 
 改完热键后，在设置窗口点一次保存，或 `wps-copy --stop && wps-copy --start`，让热键
@@ -339,7 +352,8 @@ wps-clip-bridge/
 │   └── _vendor/             内置的 python-xlib 与 six
 ├── bin/                     5 个可执行入口（薄壳）
 ├── data/                    菜单项、自启项、图标、man page、AppStream 元数据
-├── tools/                   render-icons.py、release.sh、check-deb.sh、changelog-notes.py、build-apt-repo.py
+├── tools/                   render-icons.py、release.sh、check-deb.sh、changelog-notes.py、
+│                            build-apt-repo.py、probe-gui.py（界面探针）
 ├── tests/                   单元测试（不需要图形环境）
 ├── debian/                  control、维护脚本、copyright、changelog
 ├── .github/                 CI、tag 触发发版、Issue / PR 模板
@@ -362,7 +376,7 @@ python3 -m wpsclip.daemon        # 看护进程
 
 ### 测试
 
-316 个用例，不需要图形界面，也不碰你的真实配置（每个用例都在临时目录里跑）：
+351 个用例，不需要图形界面，也不碰你的真实配置（每个用例都在临时目录里跑）：
 
 ```sh
 python3 -m unittest discover -s tests        # 全跑，约 10 秒
@@ -370,6 +384,7 @@ python3 -m unittest tests.test_recent -v     # 只跑解析与多源兜底
 python3 -m unittest tests.test_cli -v        # --list / --pin 的输出格式
 python3 -m unittest tests.test_apt_repo -v   # apt 源的 Packages/Release 自洽
 ./tools/check-deb.sh                         # 打出来的包内容对不对
+DISPLAY=:99 python3 tools/probe-gui.py       # 界面行为（需要 Xvfb，见 MAINTAINING）
 ```
 
 > 动 `recent.py` 的解析规则之前先读 `tests/test_recent.py`：每条用例都对应一个真实

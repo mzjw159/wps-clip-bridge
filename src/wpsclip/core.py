@@ -13,7 +13,7 @@ import sys
 import time
 
 APP = 'wps-clip-bridge'
-VERSION = '1.10.0'
+VERSION = '1.11.0'
 
 # 默认配置；用户可在 ~/.config/wps-clip-bridge/config.ini 覆盖
 DEFAULTS = {
@@ -57,6 +57,9 @@ DEFAULTS = {
         # 很烦，所以记住；界面上有 × 可以一键还原。
         'filter_type': '',
         'filter_source': '',
+        # 各列宽度，JSON 对象（{"name": 320, "size": 80}）。拖过列宽之后
+        # 下次打开还是那个样子，不用每次重新拖。
+        'col_widths': '{}',
     },
 }
 
@@ -107,6 +110,38 @@ def req_path():
 def gui_wake_path():
     """按下热键时摸一下这个文件，已在运行的窗口会自己跳到前台。"""
     return runtime_file('gui-wake')
+
+
+def as_paths(value):
+    """把「一个路径」或「一串路径」统一成路径列表。
+
+    界面内部的调用一律传列表，但托盘菜单那几行天然是「点一下复制这一条」，
+    回调里传单个字符串最顺手。曾经 :meth:`gui.App.copy_paths` 直接遍历参数，
+    字符串于是被按字符拆成 ``['/', 'h', 'o', ...]``，一个都不是文件，函数
+    静默返回 —— 用户看到的就是「点托盘里的最近文档没反应，也没通知」。
+    归一放在入口，调用方就不用记住该传哪种。
+    """
+    if value is None:
+        return []
+    if isinstance(value, bytes):
+        return [os.fsdecode(value)]
+    if isinstance(value, str):
+        return [value]
+    try:
+        items = list(value)
+    except TypeError:
+        items = [value]
+    out = []
+    for item in items:
+        if item is None:
+            continue
+        if not isinstance(item, str):
+            try:
+                item = os.fsdecode(item)      # bytes / os.PathLike
+            except (TypeError, ValueError):
+                continue
+        out.append(item)
+    return out
 
 
 # ---------------------------------------------------------------- 配置
@@ -165,6 +200,29 @@ def conf_int(section, key, fallback):
         return int(conf(section, key, str(fallback)))
     except ValueError:
         return fallback
+
+
+def int_map(key, fields, lo=0, hi=10000):
+    """读 ``ui`` 段里存成 JSON 对象的整数表（目前只有列宽）。
+
+    配置是用户也能手改的文件，坏一点不该让窗口打不开：JSON 解析失败就当没
+    存过；只认 ``fields`` 里的键（删掉一列后旧配置不会阴魂不散）；值不是
+    整数或越界的都丢掉 —— 列宽被写成 0 会变成一条看不见的缝。
+    """
+    try:
+        raw = json.loads(conf('ui', key, '') or '{}')
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for name in fields:
+        value = raw.get(name)
+        # bool 是 int 的子类，True 会被当成宽度 1，得挡掉
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        out[name] = max(lo, min(hi, value))
+    return out
 
 
 def config_file():

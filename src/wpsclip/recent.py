@@ -533,6 +533,23 @@ def sort_entries(entries, field, reverse=False):
     return rows
 
 
+def paginate(paths, limit):
+    """按上限切第一页，返回 ``(这一页, 还有多少个没列出)``。
+
+    界面一次最多画 200 条 —— 再多也只是让滚动条变长，该找不到的还是找不到。
+    但**过滤要在切页之前做**：只在前 200 条里搜，用户会以为「明明有的文件
+    不见了」。所以这里只负责切，切掉多少要能说清楚。
+    """
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 0
+    items = list(paths)
+    if limit <= 0 or len(items) <= limit:
+        return items, 0
+    return items[:limit], len(items) - limit
+
+
 if __name__ == '__main__':
     for i, p in enumerate(parse_recent(), 1):
         print('%2d. %s' % (i, p))

@@ -478,6 +478,92 @@ class WakeUpTest(unittest.TestCase):
 
 
 
+class _FakeWin(object):
+    """只回答「窗口现在可见吗」。"""
+
+    def __init__(self, visible):
+        self.visible = visible
+
+    def get_visible(self):
+        return self.visible
+
+
+class _CopyApp(object):
+    """copy_paths 只用到这几个成员，其余用替身，不建真窗口。"""
+
+    def __init__(self, visible=False):
+        self.win = _FakeWin(visible)
+        self.status = []
+        self._copy_seq = 0
+        self._copy_busy = False
+
+    def set_status(self, text):
+        self.status.append(text)
+
+    def _update_busy(self):
+        pass
+
+
+@_need_gi
+class CopyPathsArgsTest(unittest.TestCase):
+    """托盘菜单传单个路径、界面里传列表 —— 两边都得能复制。
+
+    曾经这里直接 ``for p in paths``：字符串被按字符拆成 ['/', 'h', ...]，
+    ``isfile`` 一个都不成立，函数静默返回。用户看到的现象是「点托盘里的
+    最近文档没反应，也没有通知」，而日志里连一行错误都没有。
+    """
+
+    def setUp(self):
+        import tempfile
+        fd, self.tmpfile = tempfile.mkstemp(suffix='.docx')
+        os.close(fd)
+
+    def tearDown(self):
+        try:
+            os.unlink(self.tmpfile)
+        except OSError:
+            pass
+
+    def _run(self, arg, visible=False):
+        from unittest import mock
+        app = _CopyApp(visible)
+        got = []
+
+        def fake_async(paths, on_done, on_stage=None):
+            got.append(list(paths))
+            return None
+
+        notices = []
+        with mock.patch.object(gui.service, 'copy_async', fake_async), \
+                mock.patch.object(gui.service, 'notify',
+                                  lambda s, b='': notices.append((s, b))):
+            gui.App.copy_paths(app, arg)
+        return app, got, notices
+
+    def test_single_string_is_copied(self):
+        app, got, _ = self._run(self.tmpfile)
+        self.assertEqual(got, [[self.tmpfile]])
+        self.assertIn('正在复制…', app.status)
+
+    def test_list_still_works(self):
+        app, got, _ = self._run([self.tmpfile])
+        self.assertEqual(got, [[self.tmpfile]])
+
+    def test_missing_file_with_hidden_window_notifies(self):
+        # 托盘点到已被删除/移走的文件：窗口是藏着的，状态栏没人看得见
+        app, got, notices = self._run('/no/such/file.docx', visible=False)
+        self.assertEqual(got, [])
+        self.assertEqual(app.status[-1], '没有可复制的文件')
+        self.assertEqual(len(notices), 1)
+        self.assertIn('没有可复制的文件', notices[0][0])
+
+    def test_missing_file_with_visible_window_stays_quiet(self):
+        # 窗口开着就别再弹通知，状态栏已经说清楚了
+        app, got, notices = self._run('/no/such/file.docx', visible=True)
+        self.assertEqual(got, [])
+        self.assertEqual(notices, [])
+
+
 if __name__ == '__main__':
     if _IMPORT_ERR is not None:
         print('跳过：无法导入 gui（%r）' % (_IMPORT_ERR,))

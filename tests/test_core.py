@@ -165,6 +165,80 @@ class PinnedTest(_TmpHome):
         self.assertEqual(core.pinned_paths(), ['/a.docx'])
 
 
+class AsPathsTest(unittest.TestCase):
+    """入口归一：托盘菜单传单个路径，界面里传列表，两边都得认。
+
+    这条曾经出过真 bug：``copy_paths`` 直接遍历参数，字符串被按字符拆开，
+    一个都不是文件，于是点托盘的「最近文档」既没复制也没提示。
+    """
+
+    def test_single_string_is_one_path(self):
+        self.assertEqual(core.as_paths('/home/u/a.docx'), ['/home/u/a.docx'])
+
+    def test_list_kept_as_is(self):
+        self.assertEqual(core.as_paths(['/a', '/b']), ['/a', '/b'])
+
+    def test_tuple_accepted(self):
+        self.assertEqual(core.as_paths(('/a',)), ['/a'])
+
+    def test_none_empty(self):
+        self.assertEqual(core.as_paths(None), [])
+
+    def test_none_items_skipped(self):
+        self.assertEqual(core.as_paths(['/a', None, '/b']), ['/a', '/b'])
+
+    def test_pathlike_accepted(self):
+        import pathlib
+        self.assertEqual(core.as_paths([pathlib.PurePosixPath('/a')]), ['/a'])
+
+    def test_bytes_decoded(self):
+        self.assertEqual(core.as_paths(b'/a'), ['/a'])
+
+    def test_empty_string_kept(self):
+        # 空串原样留着，交给上层用 isfile 筛掉；这里不做业务判断
+        self.assertEqual(core.as_paths(''), [''])
+
+
+class IntMapTest(_TmpHome):
+    """列宽这类「JSON 对象存整数」的配置：坏了就当没存过。"""
+
+    def test_default_empty(self):
+        self.assertEqual(core.int_map('col_widths', ('name', 'size')), {})
+
+    def test_roundtrip(self):
+        core.save_conf({('ui', 'col_widths'): '{"name": 320, "size": 80}'})
+        self.assertEqual(core.int_map('col_widths', ('name', 'size')),
+                         {'name': 320, 'size': 80})
+
+    def test_unknown_fields_dropped(self):
+        # 删掉一列之后，旧配置里那个键不该阴魂不散
+        core.save_conf({('ui', 'col_widths'): '{"gone": 300, "name": 200}'})
+        self.assertEqual(core.int_map('col_widths', ('name',)), {'name': 200})
+
+    def test_out_of_range_clamped(self):
+        core.save_conf({('ui', 'col_widths'): '{"name": 3, "size": 99999}'})
+        self.assertEqual(core.int_map('col_widths', ('name', 'size'),
+                                      lo=40, hi=2000),
+                         {'name': 40, 'size': 2000})
+
+    def test_bool_is_not_a_width(self):
+        # bool 是 int 的子类，不挡住的话 True 会变成 1 像素宽的列
+        core.save_conf({('ui', 'col_widths'): '{"name": true}'})
+        self.assertEqual(core.int_map('col_widths', ('name',)), {})
+
+    def test_garbage_json_ignored(self):
+        core.save_conf({('ui', 'col_widths'): 'not json'})
+        self.assertEqual(core.int_map('col_widths', ('name',)), {})
+
+    def test_non_object_json_ignored(self):
+        core.save_conf({('ui', 'col_widths'): '[1, 2, 3]'})
+        self.assertEqual(core.int_map('col_widths', ('name',)), {})
+
+    def test_string_values_dropped(self):
+        core.save_conf({('ui', 'col_widths'): '{"name": "320"}'})
+        self.assertEqual(core.int_map('col_widths', ('name',)), {})
+
+
 class AutostartTest(_TmpHome):
     def test_off_writes_hidden_override(self):
         self.assertFalse(core.autostart_enabled())

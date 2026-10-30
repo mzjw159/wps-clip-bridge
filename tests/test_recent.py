@@ -543,5 +543,42 @@ class SortEntriesTest(unittest.TestCase):
         self.assertEqual(self.rows, before)
 
 
+class PaginateTest(unittest.TestCase):
+    """切页只负责切；「还有多少没列出」必须能算出来给状态栏用。"""
+
+    def test_under_limit_keeps_everything(self):
+        page, hidden = recent.paginate(['/a', '/b'], 5)
+        self.assertEqual(page, ['/a', '/b'])
+        self.assertEqual(hidden, 0)
+
+    def test_exact_limit(self):
+        page, hidden = recent.paginate(['/a', '/b'], 2)
+        self.assertEqual(page, ['/a', '/b'])
+        self.assertEqual(hidden, 0)
+
+    def test_over_limit_reports_remainder(self):
+        page, hidden = recent.paginate(['/a', '/b', '/c'], 2)
+        self.assertEqual(page, ['/a', '/b'])
+        self.assertEqual(hidden, 1)
+
+    def test_zero_or_negative_means_no_limit(self):
+        self.assertEqual(recent.paginate(['/a', '/b'], 0), (['/a', '/b'], 0))
+        self.assertEqual(recent.paginate(['/a'], -3), (['/a'], 0))
+
+    def test_bad_limit_falls_back_to_no_limit(self):
+        self.assertEqual(recent.paginate(['/a'], 'abc'), (['/a'], 0))
+
+    def test_returns_new_list(self):
+        src = ['/a', '/b']
+        page, _ = recent.paginate(src, 1)
+        page.append('/c')
+        self.assertEqual(src, ['/a', '/b'])
+
+    def test_generator_accepted(self):
+        page, hidden = recent.paginate((p for p in ('/a', '/b')), 1)
+        self.assertEqual(page, ['/a'])
+        self.assertEqual(hidden, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

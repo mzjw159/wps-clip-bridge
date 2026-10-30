@@ -14,6 +14,7 @@
 - 右键菜单：打开、打开所在位置、复制、复制路径、移到回收站。
 """
 import datetime
+import json
 import os
 import sys
 import threading
@@ -63,6 +64,19 @@ C_ISGROUP, C_ICON, C_NAME, C_SOURCE, C_TYPE, C_SIZE, C_DIR, C_WHEN, C_PATH, C_MT
 _BUCKETS = ('今天', '昨天', '近 3 天', '近 7 天', '近 30 天', '更早')
 
 _SOURCE_COLOR = {'云端': '#2f7bd6', '微信': '#07c160', '本地': '#8a8f98'}
+
+# 列宽的可接受区间：太窄只剩一道缝（拖不出来），太宽会把别的列全挤没。
+# 配置被手改坏了也在这两个数之间夹一下。
+MIN_COL_WIDTH, MAX_COL_WIDTH = 40, 2000
+
+# 列表一次最多画多少条。再多也只是让滚动条变长，找不到的还是找不到；
+# 但搜索和筛选始终在全量上做，画不完的部分会在状态栏里说清还有多少。
+PAGE_LIMIT = 200
+
+# 记住宽度的列。最后一列（所在文件夹）不记：它是「吃掉剩余宽度」的那一列，
+# 宽度是布局算出来的，不是用户调出来的 —— 记下来就等于把窗口当前大小
+# 写死了，换个窄一点的窗口就只剩横向滚动条。
+REMEMBER_COLS = ('name', 'source', 'type', 'size', 'mtime')
 
 def clamp_window_pos(x, y, w, h, screen_w, screen_h, keep=120):
     """把记住的窗口坐标拉回可见范围。
@@ -321,6 +335,14 @@ class App(object):
         self._ticks = 0
         self._copy_seq = 0          # 复制请求序号，用来作废过期回调
         self._copy_busy = False
+        # 列宽：启动时从配置读回，拖动后防抖写回（见 _on_width_notify）。
+        # _width_quiet 用来屏蔽「程序自己在设宽度」触发的保存。
+        self._widths = {}
+        self._width_quiet = True
+        self._width_save_id = 0
+        # 窗口尺寸一变，GTK 会重算各列宽度（最后一列自己填满），那一串
+        # notify::width 是布局算出来的，不是用户拖的。用时间窗挡掉。
+        self._layout_guard = 0
         self._theme_dark = settings_mod.apply_theme()
 
         self.win = Gtk.Window(title='WPS 最近文档')
@@ -442,10 +464,29 @@ class App(object):
         # 自己重排重填（reload），顺序完全可控。
         self._columns = {}
         self._sort = None          # None = 默认（按时间分组）；否则 (字段, 是否降序)
+        # 列宽：配置里存的是 {"name": 320, ...}，坏值由 core.int_map 清掉
+        self._widths = core.int_map('col_widths', REMEMBER_COLS,
+                                    lo=MIN_COL_WIDTH, hi=MAX_COL_WIDTH)
+        # 每列的默认宽度：用来判断「这次 notify 是不是真变了」，否则初始布局
+        # 会把每个默认值都当成用户的选择写一遍
+        self._default_widths = {}
 
-        def _sortable(col, field):
+        def _fit(col, field, default=None, min_width=0):
+            """列可拖宽、可点排序；宽度记进配置，下次打开还是自己调好的样子。"""
             # 表头没有 tooltip API（TreeViewColumn 不实现 GtkTooltip），
             # 排序提示写在方向箭头和状态栏里
+            col.set_resizable(True)
+            if min_width:
+                col.set_min_width(min_width)
+            if default:
+                self._default_widths[field] = default
+            width = self._widths.get(field) or default
+            if width:
+                col.set_fixed_width(width)
+            if field in REMEMBER_COLS:
+                # 拖动分隔条会连发多次 notify，攒到松手后再写盘
+                # （见 _on_width_notify）
+                col.connect('notify::width', self._on_width_notify, field)
             col.set_clickable(True)
             col.connect('clicked', self.on_sort_clicked, field)
             self._columns[field] = col
@@ -460,9 +501,7 @@ class App(object):
         col.pack_start(name_cell, True)
         col.set_cell_data_func(self.icon_cell, self._name_icon_func)
         col.set_cell_data_func(name_cell, self._name_text_func)
-        col.set_fixed_width(320)
-        col.set_resizable(True)
-        _sortable(col, 'name')
+        _fit(col, 'name', 320, min_width=160)
         view.append_column(col)
 
         # 来源
@@ -470,8 +509,7 @@ class App(object):
         col = Gtk.TreeViewColumn('来源')
         col.pack_start(src_cell, True)
         col.set_cell_data_func(src_cell, self._source_func)
-        col.set_fixed_width(64)
-        _sortable(col, 'source')
+        _fit(col, 'source', 64, min_width=48)
         view.append_column(col)
 
         # 类型
@@ -479,8 +517,7 @@ class App(object):
         col = Gtk.TreeViewColumn('类型')
         col.pack_start(type_cell, True)
         col.set_cell_data_func(type_cell, self._plain_func(C_TYPE))
-        col.set_fixed_width(64)
-        _sortable(col, 'type')
+        _fit(col, 'type', 64, min_width=48)
         view.append_column(col)
 
         # 大小
@@ -489,8 +526,7 @@ class App(object):
         col = Gtk.TreeViewColumn('大小')
         col.pack_start(size_cell, True)
         col.set_cell_data_func(size_cell, self._plain_func(C_SIZE))
-        col.set_fixed_width(80)
-        _sortable(col, 'size')
+        _fit(col, 'size', 80, min_width=64)
         view.append_column(col)
 
         # 修改时间
@@ -498,8 +534,7 @@ class App(object):
         col = Gtk.TreeViewColumn('修改时间')
         col.pack_start(when_cell, True)
         col.set_cell_data_func(when_cell, self._plain_func(C_WHEN))
-        col.set_fixed_width(105)
-        _sortable(col, 'mtime')
+        _fit(col, 'mtime', 105, min_width=84)
         view.append_column(col)
 
         # 所在文件夹
@@ -508,8 +543,8 @@ class App(object):
         col = Gtk.TreeViewColumn('所在文件夹')
         col.pack_start(dir_cell, True)
         col.set_cell_data_func(dir_cell, self._dir_func)
-        col.set_min_width(160)
-        _sortable(col, 'dir')
+        # 文件夹列没存过宽度时不设 fixed_width：让它吃掉窗口剩下的宽度
+        _fit(col, 'dir', min_width=160)
         view.append_column(col)
 
         view.connect('row-activated', self.on_activate)
@@ -583,7 +618,12 @@ class App(object):
         self.reload()
         # 先摆回上次关闭时的位置和大小，再显示（顺序反了会被默认尺寸覆盖）
         self._restore_geometry()
+        # 必须在 show_all 之前接上：首次分配尺寸也算「窗口变了」
+        self.win.connect('size-allocate', self._on_win_size)
         self.win.show_all()
+        # 布局稳定之后才允许记录列宽：前面 set_fixed_width / show_all 都会
+        # 触发 notify::width，那些是程序自己在摆位，不是用户拖出来的
+        self._width_quiet = False
         # 配了「启动时待在托盘」就不弹窗，但托盘必须存在，否则窗口无处唤回
         if core.conf_bool('ui', 'start_hidden', False) and self.tray_available():
             self.win.hide()
@@ -1013,6 +1053,54 @@ class App(object):
                 title += ' ↓' if self._sort[1] else ' ↑'
             col.set_title(title)
 
+    def _on_width_notify(self, col, _pspec, field):
+        """列宽变了：攒一会儿再写配置。
+
+        拖分隔条时 notify 会连着一串发出来（几乎每像素一次），每次都写盘就是
+        拿磁盘换一条拖动动画。这里只记最新值，600ms 没新动作才真正落盘。
+
+        麻烦在于「列宽变了」不等于「用户拖了」：窗口一改大小，GTK 会重算所有
+        列（最后一列自己吃掉剩余宽度），那些 notify 也长得一模一样。不挡住
+        的话，每次开关窗口都会把布局结果当成用户的选择存下来，最后列宽就
+        锁死在某个尺寸上。所以窗口尺寸变化后的一小段时间里一律不记。
+        """
+        if self._width_quiet or GLib.get_monotonic_time() < self._layout_guard:
+            return
+        width = col.get_width()
+        if width < MIN_COL_WIDTH:
+            # 还没 realize、或者窗口藏起来时宽度是 1，这种值存进去会让下次
+            # 打开时所有列都变成一条缝
+            return
+        if self._widths.get(field) == width:
+            return
+        # 初始布局会为每列各发一次 notify，宽度还是默认值 —— 那不是用户改的
+        if field not in self._widths and width == self._default_widths.get(field):
+            return
+        self._widths[field] = width
+        if self._width_save_id:
+            try:
+                GLib.source_remove(self._width_save_id)
+            except Exception:
+                pass
+        self._width_save_id = GLib.timeout_add(600, self._save_widths)
+
+    def _on_win_size(self, _win, _alloc):
+        """窗口尺寸变了：接下来的列宽变化是布局算的，30 毫秒内不记。
+
+        用 30ms 这种很短的窗口就够：GTK 的重新布局在 size-allocate 的同一轮
+        主循环里就做完了，而人手拖一次分隔条要几百毫秒。
+        """
+        self._layout_guard = GLib.get_monotonic_time() + 30000
+
+    def _save_widths(self):
+        self._width_save_id = 0
+        try:
+            core.save_conf({('ui', 'col_widths'):
+                            json.dumps(self._widths, sort_keys=True)})
+        except Exception as ex:
+            core.log('保存列宽失败: %r' % (ex,))
+        return False
+
     def reload(self):
         self.store.clear()
         # 搜索框原文留着：单元格高亮要按原文分词，转小写交给 highlight_markup
@@ -1020,10 +1108,13 @@ class App(object):
         terms = recent.split_terms(raw_kw)
         self._kw = raw_kw
         tsel, ssel = self._type_filter(), self._src_filter()
-        paths = recent.parse_recent(limit=max(200, core.conf_int('ui', 'limit', 80)))
+        limit = max(PAGE_LIMIT, core.conf_int('ui', 'limit', 80))
+        # 一次读全量：搜索和筛选必须覆盖所有文档 —— 只在前 200 条里搜，
+        # 用户会以为「明明有的文件不见了」。画多少条由 limit 另行控制。
+        all_paths, _stats = recent.collect()
         # 托盘菜单的「最近 5 个」用完整列表：搜索和筛选都只是「看」的姿势，
         # 不该把「合上窗口也能随手复制最近文档」这条路径改窄。
-        self._all_paths = list(paths)
+        self._all_paths = list(all_paths)
 
         def keep(p):
             # 多个词是「并且」：每个词都要在名字或目录里出现
@@ -1047,11 +1138,13 @@ class App(object):
         # 文件已经不在了就先不显示（U 盘没插、目录被挪走都会这样），但也不
         # 从配置里删 —— 换回来还应该在。
         pinned_all = core.pinned_paths()
+        pinned_set = set(pinned_all)
         pinned_entries = entries_of(
             [p for p in pinned_all if os.path.isfile(p) and keep(p)])
-        pinned_set = set(pinned_all)
-        rest_entries = entries_of(
-            [p for p in paths if p not in pinned_set and keep(p)])
+        # 置顶的不占分页名额（它们单独成组，永远在最前）
+        rest_kept = [p for p in all_paths if p not in pinned_set and keep(p)]
+        shown, hidden = recent.paginate(rest_kept, limit)
+        rest_entries = entries_of(shown)
 
         sort_label = ''
         if self._sort:
@@ -1109,9 +1202,19 @@ class App(object):
                 extra += ' · 筛选：%s' % flt
             if sort_label:
                 extra += ' · %s' % sort_label
+            if hidden:
+                # 只画前 limit 条：滚动条再长也翻不到 200 条以后，与其让人
+                # 一直往下滚找，不如直说还差多少、以及怎么找到剩下的
+                extra += ' · 另有 %d 个更早的未列出' % hidden
             self.set_status('共 %d 个文档%s · 双击或回车复制，↑↓ 选择，Ctrl/Shift 多选'
                             % (total, extra))
-            self.status.set_tooltip_text(None)
+            if hidden:
+                self.status.set_tooltip_text(
+                    '列表一次最多显示前 %d 个（按修改时间）。\n'
+                    '想找更早的文件，直接在搜索框输文件名 —— 搜索覆盖全部 %d 个，\n'
+                    '不受这个上限影响。' % (limit, len(all_paths)))
+            else:
+                self.status.set_tooltip_text(None)
             self._show_empty_hint('')
         elif raw_kw or flt:
             # 搜不到有两种原因：关键词不对，或者筛选条件把它挡掉了。
@@ -1731,10 +1834,17 @@ class App(object):
 
         实际动作（必要时拉起后台、写入、等确认）最多要几秒，全部丢给
         service.copy_async 在后台线程里做，主线程只更新状态，界面不再假死。
+
+        参数可以是单个路径，也可以是路径列表 —— 托盘菜单传的是单个字符串，
+        界面里传的是列表，这里统一（见 :func:`core.as_paths`）。
         """
-        paths = [p for p in paths if os.path.isfile(p)]
+        paths = [p for p in core.as_paths(paths) if os.path.isfile(p)]
         if not paths:
             self.set_status('没有可复制的文件')
+            # 托盘点到已被删除/移走的文件时窗口是藏着的，状态栏看不见 ——
+            # 「点了没反应」比报错更让人困惑，所以这种情况必须弹通知。
+            if not self.win.get_visible():
+                service.notify('没有可复制的文件', '它可能已被移动或删除')
             return
         # 用序号作废过期的结果：连续点两次时，慢的那次的回调不会覆盖新结果
         self._copy_seq += 1
