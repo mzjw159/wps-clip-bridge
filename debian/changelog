@@ -1,3 +1,20 @@
+wps-clip-bridge (1.7.1) unstable; urgency=medium
+
+  * 修「窗口最小化到任务栏后，点托盘图标唤不出」。
+    最小化时 deiconify() 只是给窗管发了个异步请求，窗口真正取消图标化之前
+    紧跟着的 present() 会被窗管当成对「还在任务栏里的窗口」的无效请求丢掉，
+    KWin 系还会以防抢焦点为由干脆不理 —— 于是点了像没点。现在最小化时按拍
+    重试（70ms 一拍，最多 8 拍），每拍补一条 EWMH _NET_ACTIVE_WINDOW 激活
+    请求（等同于用户从任务栏点窗口），窗口一出来就收手；万一还不行，中途
+    整窗重挂一次兜底，位置尺寸原样摆回。
+  * 「是否还在任务栏里」改问 ICCCM 的 WM_STATE，而不是 GDK 缓存的状态：
+    只要我们自己调过 deiconify()，GDK 就把那个标记抹掉了，问它永远 False。
+  * 热键唤回（present）走同一套逻辑，最小化时也能叫出来。
+  * 测试 185 -> 193：新增唤回用例（WM_STATE 优先于 GDK、按拍重试、到点重挂、
+    最后一拍收手不空转）。
+
+ -- shuai <shuai@localhost>  Fri, 30 Oct 2026 11:05:00 +0800
+
 wps-clip-bridge (1.7.0) unstable; urgency=medium
 
   * 窗口可以拖边缘、拖四角改大小了。

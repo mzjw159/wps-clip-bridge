@@ -52,6 +52,9 @@ WAKE_POLL_MS = 400
 # 窗口四周用于拖拽缩放的热区宽度（像素）
 GRIP = 5
 
+# ICCCM WM_STATE 的 IconicState：窗管把窗口收进了任务栏
+ICCCM_ICONIC = 3
+
 # TreeStore 列索引
 C_ISGROUP, C_ICON, C_NAME, C_SOURCE, C_TYPE, C_SIZE, C_DIR, C_WHEN, C_PATH, C_MTIME = range(10)
 
@@ -666,24 +669,24 @@ class App(object):
                 self.tray.stop()
         except Exception:
             pass
+        self._drop_xdpy()
         Gtk.main_quit()
 
     def show_window(self, *_):
         # 先把窗口「显示」再「提到前面」：deiconify 只对已映射的窗口有效，
         # 而「启动即隐藏」时窗口连 X 窗口都还没创建，只 deiconify 是叫不出来的。
+        #
+        # 「是否还在任务栏里」必须在 show()/deiconify() 之前问：GDK 只要收到
+        # 我们自己发的 deiconify 就会把图标化标记抹掉，事后再问必然是 False。
+        was_iconic = self._is_iconified()
         try:
             self.win.show()
             self.win.deiconify()
             self.win.show_all()
-            self.win.present()
-            # 有的窗管不认 present()，再抢一次焦点，失败也无所谓
-            try:
-                self.win.grab_focus()
-            except Exception:
-                pass
         except Exception as ex:
             # 这里以前是 pass —— 托盘点了没反应也无从查起
             core.log('显示窗口失败: %r' % (ex,))
+        self._kick_raise(iconic=was_iconic)
         self.reload()
 
     def open_settings(self, *_):
@@ -1135,11 +1138,163 @@ class App(object):
         return True
 
     def present(self):
+        # 热键唤醒走这里：同样要分清「藏在后台」和「缩在任务栏」两种状态
+        was_iconic = self._is_iconified()
         try:
+            self.win.show()
             self.win.deiconify()
-            self.win.present()
         except Exception:
             pass
+        self._kick_raise(iconic=was_iconic)
+
+    # 最小化之后补几拍、每拍隔多久（毫秒）：窗口恢复是窗管的异步动作，
+    # 一拍打不通不代表不行；连打大半秒足够，又不会把界面拖住。
+    RAISE_STEPS = 8
+    RAISE_INTERVAL = 70
+    # 第几拍还不行就整窗重挂（见 _remap_window）；放在靠后，先让激活请求多试
+    RAISE_REMAP_STEP = 6
+
+    def _kick_raise(self, step=0, iconic=None):
+        """把窗口从「最小化 / 被挡住」里捞出来。
+
+        以前这里直接 ``deiconify() + present()``：窗口只是藏起来时没问题，
+        可最小化到任务栏之后往往就唤不出来 —— ``deiconify()`` 只是给窗管发了
+        个异步请求，窗口真正取消图标化之前，紧跟着的 ``present()`` 会被窗管
+        当成对「还在任务栏里的窗口」的无效请求丢掉；再加上「防抢焦点」策略，
+        干脆连请求都不理。所以这里按拍重试，每拍补一条 EWMH 激活请求，最后
+        还有整窗重挂兜底，直到窗管确认窗口已经正常。
+        """
+        if step > 0 or iconic is None:
+            # 以窗管的说法为准：真出来了就收手，别把窗口一直往上抢
+            iconic = self._is_iconified()
+        try:
+            if iconic and step == self.RAISE_REMAP_STEP:
+                self._remap_window()
+            if iconic:
+                self.win.deiconify()
+                # GTK 这条路可能被窗管忽略，再直接问一次窗管
+                self._x11_activate()
+            self.win.present_with_time(Gdk.CURRENT_TIME)
+            w = self.win.get_window()
+            if w is not None:
+                w.raise_()
+        except Exception as ex:
+            core.log('提升窗口失败: %r' % (ex,))
+        if iconic and step + 1 < self.RAISE_STEPS:
+            GLib.timeout_add(self.RAISE_INTERVAL, self._kick_raise, step + 1, True)
+
+    def _is_iconified(self):
+        """窗口是否还缩在任务栏里（图标化）。
+
+        以 ICCCM 的 ``WM_STATE`` 为准，而不是 GDK 缓存的状态：只要我们自己
+        调过 ``deiconify()``，GDK 就会把这个标记抹掉，问它永远得到 False。
+        """
+        state = self._wm_state()
+        if state is not None:
+            return state == ICCCM_ICONIC
+        try:
+            w = self.win.get_window()
+            return bool(w is not None and w.get_state() & Gdk.WindowState.ICONIFIED)
+        except Exception:
+            return False
+
+    def _xdpy(self):
+        """复用一个 X 连接：一次唤回要问好几遍窗管状态。"""
+        d = getattr(self, '_xdpy_cache', None)
+        if d is None:
+            from Xlib import display
+            d = display.Display()
+            self._xdpy_cache = d
+        return d
+
+    def _drop_xdpy(self):
+        d = getattr(self, '_xdpy_cache', None)
+        self._xdpy_cache = None
+        try:
+            if d is not None:
+                d.close()
+        except Exception:
+            pass
+
+    def _wm_state(self):
+        """读窗管给的窗口状态：1=正常 3=图标化；读不到返回 None。"""
+        try:
+            w = self.win.get_window()
+            if w is None:
+                return None
+            d = self._xdpy()
+            win = d.create_resource_object('window', w.get_xid())
+            atom = d.intern_atom('WM_STATE')
+            prop = win.get_full_property(atom, atom)
+            if prop is None or not len(prop.value):
+                return None
+            return int(prop.value[0])
+        except Exception:
+            self._drop_xdpy()
+            return None
+
+    def _x11_activate(self):
+        """绕开 GTK，直接给窗管发 EWMH ``_NET_ACTIVE_WINDOW``。
+
+        source 填 2（分页器）：这一档最不容易被「防抢焦点」策略挡下来。
+        效果等同于用户从任务栏点了窗口 —— 取消最小化、切桌面、提到最前。
+        """
+        try:
+            from Xlib import X
+            from Xlib.protocol import event as xev
+        except Exception:
+            return False
+        try:
+            w = self.win.get_window()
+            if w is None:
+                return False
+            d = self._xdpy()
+            root = d.screen().root
+            ev = xev.ClientMessage(
+                window=d.create_resource_object('window', w.get_xid()),
+                client_type=d.intern_atom('_NET_ACTIVE_WINDOW'),
+                data=(32, [2, X.CurrentTime, 0, 0, 0]))
+            root.send_event(
+                ev, event_mask=(X.SubstructureRedirectMask |
+                                X.SubstructureNotifyMask))
+            d.flush()
+            return True
+        except Exception as ex:
+            self._drop_xdpy()
+            core.log('X11 激活窗口失败: %r' % (ex,))
+            return False
+
+    def _remap_window(self):
+        """兜底：把窗口整扇收回去再挂出来。
+
+        对多数窗管来说，「取消最小化」可以不理，但「新窗口要映射」总得管；
+        这条就是赌后者。实测 KWin 系连 MapRequest 也不理（所以真正管用的还是
+        上面那条激活请求），留着它是为了别的窗管——反正这时窗口本来就缩在
+        任务栏里，用户看不到中间那一下。尺寸位置先记下，重新映射后原样摆回。
+        """
+        try:
+            w = self.win.get_window()
+            g = w.get_geometry() if w is not None else None
+        except Exception:
+            g = None
+        try:
+            self.win.hide()
+            # 让 withdraw 真的发到 X 上：同一次迭代里 hide+show 会被合并成
+            # 一次映射请求，窗管根本不认为这是新窗口
+            for _ in range(8):
+                if not Gtk.events_pending():
+                    break
+                Gtk.main_iteration_do(False)
+            self.win.show_all()
+            if g is not None:
+                self.win.resize(g.width, g.height)
+                self.win.move(g.x, g.y)
+                core.log('窗口唤不出，已整窗重挂一次（%dx%d @%d,%d）'
+                         % (g.width, g.height, g.x, g.y))
+            else:
+                core.log('窗口唤不出，已整窗重挂一次')
+        except Exception as ex:
+            core.log('整窗重挂失败: %r' % (ex,))
 
     # ------------------------------------------------ 复制
     def copy_paths(self, paths):

@@ -186,6 +186,145 @@ class ClampWindowPosTest(unittest.TestCase):
         self.assertIsNone(gui.clamp_window_pos(None, None, 0, 0, 1920, 1080))
 
 
+class _FakeGdkWindow(object):
+    """替身：GDK 侧的窗口，只提供状态和 raise_。"""
+
+    def __init__(self, state=0):
+        self._state = state
+        self.raised = 0
+
+    def get_state(self):
+        return self._state
+
+    def raise_(self):
+        self.raised += 1
+
+
+class _FakeWindow(object):
+    """替身：Gtk.Window，只记下被调过哪些动作。"""
+
+    def __init__(self, gdk_state=0):
+        self.calls = []
+        self.gdk = _FakeGdkWindow(gdk_state)
+
+    def deiconify(self):
+        self.calls.append('deiconify')
+
+    def present_with_time(self, _ts):
+        self.calls.append('present')
+
+    def get_window(self):
+        return self.gdk
+
+
+class _FakeApp(object):
+    """只带唤回逻辑要用的成员，避免真去建窗口。"""
+
+    def __init__(self, wm_state, gdk_state=0):
+        self.win = _FakeWindow(gdk_state)
+        self._wm = wm_state
+        self.activated = 0
+        self.remapped = 0
+        # 这两条来自 gui.App，替身要自己带上
+        self.RAISE_STEPS = gui.App.RAISE_STEPS if gui else 10
+        self.RAISE_REMAP_STEP = gui.App.RAISE_REMAP_STEP if gui else 5
+        self.RAISE_INTERVAL = 70
+
+    def _wm_state(self):
+        return self._wm
+
+    def _x11_activate(self):
+        self.activated += 1
+        return True
+
+    def _remap_window(self):
+        self.remapped += 1
+
+
+if gui is not None:
+    # 直接把被测方法挂到替身上，测的就是 gui.App 里那段逻辑本身
+    _FakeApp._kick_raise = gui.App._kick_raise
+    _FakeApp._is_iconified = gui.App._is_iconified
+
+
+@_need_gi
+class WakeUpTest(unittest.TestCase):
+    """最小化到任务栏后，点托盘要能把窗口捞回来。
+
+    这里钉的是两个容易回退的点：判断「是否最小化」不能看 GDK 的缓存状态
+    （自己调过 deiconify 就被抹掉了），以及重试要按拍进行、到点兜底重挂。
+    """
+
+    ICONIC = gui.ICCCM_ICONIC
+
+    def test_wm_state_wins_over_gdk(self):
+        # 窗管说还在任务栏里，即使 GDK 缓存说没有，也必须算最小化
+        app = _FakeApp(wm_state=self.ICONIC, gdk_state=0)
+        self.assertTrue(app._is_iconified())
+        # 反过来：窗管已经恢复了，GDK 残留的图标化标记不能让我们继续抢窗口
+        app = _FakeApp(wm_state=1, gdk_state=gui.Gdk.WindowState.ICONIFIED)
+        self.assertFalse(app._is_iconified())
+
+    def test_gdk_fallback_without_wm_state(self):
+        app = _FakeApp(wm_state=None, gdk_state=gui.Gdk.WindowState.ICONIFIED)
+        self.assertTrue(app._is_iconified())
+        app = _FakeApp(wm_state=None, gdk_state=0)
+        self.assertFalse(app._is_iconified())
+
+    def _kick(self, app, step, iconic):
+        """跑一拍唤回，返回被安排到下一拍的参数列表。"""
+        scheduled = []
+        orig = gui.GLib.timeout_add
+        gui.GLib.timeout_add = lambda ms, cb, *a: (scheduled.append((ms, a)), 0)[1]
+        try:
+            app._kick_raise(step, iconic)
+        finally:
+            gui.GLib.timeout_add = orig
+        return scheduled
+
+    def test_retries_while_still_iconic(self):
+        app = _FakeApp(wm_state=self.ICONIC)
+        scheduled = self._kick(app, 0, True)
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][1][0], 1)          # 下一拍是 step=1
+        self.assertEqual(app.win.calls, ['deiconify', 'present'])
+        self.assertEqual(app.activated, 1)               # 走了一条 EWMH 激活
+        self.assertEqual(app.remapped, 0)
+
+    def test_stops_once_window_is_back(self):
+        # 重试拍会重新问窗管：窗口已经出来了就收手，不再抢
+        app = _FakeApp(wm_state=1)
+        scheduled = self._kick(app, 1, True)
+        self.assertEqual(scheduled, [])
+        self.assertEqual(app.activated, 0)               # 也不再发激活请求
+        self.assertEqual(app.win.calls, ['present'])     # 只抬一次
+
+    def test_first_step_trusts_caller_state(self):
+        # 第一拍用的是 show() 之前抓到的状态：那时 GDK 还没被自己的
+        # deiconify 抹掉标记，比事后再问更准，不能在这一拍重新判定
+        app = _FakeApp(wm_state=1)
+        scheduled = self._kick(app, 0, True)
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(app.activated, 1)
+
+    def test_remaps_at_the_designed_step(self):
+        app = _FakeApp(wm_state=self.ICONIC)
+        self._kick(app, gui.App.RAISE_REMAP_STEP, True)
+        self.assertEqual(app.remapped, 1)
+
+    def test_no_remap_before_that_step(self):
+        app = _FakeApp(wm_state=self.ICONIC)
+        self._kick(app, gui.App.RAISE_REMAP_STEP - 1, True)
+        self.assertEqual(app.remapped, 0)
+
+    def test_gives_up_at_the_last_step(self):
+        app = _FakeApp(wm_state=self.ICONIC)
+        scheduled = self._kick(app, gui.App.RAISE_STEPS - 1, True)
+        self.assertEqual(scheduled, [])                  # 不再排下一拍，别死循环
+        self.assertEqual(app.win.calls, ['deiconify', 'present'])
+
+
+
 if __name__ == '__main__':
     if _IMPORT_ERR is not None:
         print('跳过：无法导入 gui（%r）' % (_IMPORT_ERR,))
