@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>WPS 最近文档 · apt 源</title>
+<style>
+ body { font: 15px/1.7 -apple-system, "Noto Sans CJK SC", sans-serif;
+        max-width: 760px; margin: 48px auto; padding: 0 20px; color: #222; }
+ h1 { font-size: 24px; } code { background: #f4f4f5; padding: 2px 6px;
+ border-radius: 4px; } pre { background: #f4f4f5; padding: 14px 16px;
+ border-radius: 8px; overflow-x: auto; } pre code { background: none;
+ padding: 0; } a { color: #125a9e; }
+ @media (prefers-color-scheme: dark) {
+   body { background: #16181c; color: #e6e6e6; }
+   code, pre { background: #23262b; } a { color: #7fb2ff; }
+ }
+</style>
+<h1>WPS 最近文档 · apt 源</h1>
+<p>加一次，以后 <code>sudo apt upgrade</code> 就能升级，不用每次来下载安装包。</p>
+<pre><code>echo "deb [trusted=yes] https://mzjw159.github.io/wps-clip-bridge/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/wps-clip-bridge.list
+sudo apt update
+sudo apt install wps-clip-bridge</code></pre>
+<p>这个源<strong>没有 GPG 签名</strong>，所以那一行必须带 <code>[trusted=yes]</code> ——
+意思是你明确信任这一个源。介意的话请走
+<a href="https://github.com/mzjw159/wps-clip-bridge/releases">Release 页面</a>手动下载。</p>
+<p>项目主页：<a href="https://github.com/mzjw159/wps-clip-bridge">github.com/mzjw159/wps-clip-bridge</a></p>
