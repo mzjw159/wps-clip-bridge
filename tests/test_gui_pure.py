@@ -195,6 +195,7 @@ class TrayRecentTest(unittest.TestCase):
         self.assertEqual(out[0][0], '季度报告.docx')
 
 
+@_need_gi
 class ClampWindowPosTest(unittest.TestCase):
     """记住的窗口坐标要能安全还原：换屏、改分辨率后不能跑到屏幕外。"""
 
@@ -293,7 +294,10 @@ class WakeUpTest(unittest.TestCase):
     （自己调过 deiconify 就被抹掉了），以及重试要按拍进行、到点兜底重挂。
     """
 
-    ICONIC = gui.ICCCM_ICONIC
+    # 类体在 skip 之前就会执行，别直接写 gui.ICCCM_ICONIC：没装 PyGObject 时
+    # gui 是 None，整包测试会以 AttributeError 崩掉，而不是干净地跳过。
+    # 3 是 ICCCM WM_STATE 的 IconicState，与 gui 里的常量同值。
+    ICONIC = getattr(gui, 'ICCCM_ICONIC', 3)
 
     def test_wm_state_wins_over_gdk(self):
         # 窗管说还在任务栏里，即使 GDK 缓存说没有，也必须算最小化
