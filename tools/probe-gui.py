@@ -78,7 +78,10 @@ for i in range(260):
     docs.append(p)
 with open(H + '/.config/Kingsoft/Office.conf', 'w') as f:
     for i, p in enumerate(docs, 1):
-        f.write('wps\\\\RecentFiles\\\\files\\\\%d\\\\path=%s\n' % (i, p))
+        # 单反斜杠：真实 Office.conf 就是这么写的。以前这里写成双反斜杠，
+        # 结构化解析其实一条都没匹配上，全靠「通用扫描」兜住 —— 那一层就
+        # 等于从来没被测过。
+        f.write('wps\\RecentFiles\\files\\%d\\path=%s\n' % (i, p))
 
 print('假数据：%d 个文档' % len(docs))
 
@@ -194,7 +197,51 @@ check('没有可复制的文件' not in state, '托盘点击触发了复制', st
 check(any('已复制' in s for s, _b in notices) or '已复制' in state,
       '复制成功后有反馈（通知或状态栏）', (notices, state))
 
-print('\n[7] 截图')
+print('\n[7] 打开时间决定顺序（文件没改也算最近）')
+# 用户报的 bug：打开一份排在后面的老文档、不修改内容，WPS 那边排到第一，
+# 这边还在原位 —— 因为旧实现按文件 mtime 排。现在按 WPS 的 Sequence 时间戳。
+old = docs[250]                     # 250 小时前改过（「近 30 天」那组）
+seq_ts = int(time.time() - 30)
+with open(H + '/.config/Kingsoft/Office.conf', 'a') as f:
+    f.write('wps\\RecentFiles\\Sequence\\%s=%d\n'
+            % (old.lstrip('/').replace('/', '\\'), seq_ts))
+print('  给 %s 补一条「刚刚打开」的记录' % os.path.basename(old))
+app2.reload()
+pump(0.8)
+names = rows(app2)
+check(names and names[0] == 'doc-250.docx', '刚打开的老文档排到第一', names[:3])
+
+first_group = app2.store[app2.store.get_iter_first()][gui.C_NAME]
+check(first_group == '今天', '它进了「今天」组（按打开时间分组）', first_group)
+
+# 这一行显示的时间应该是打开时间（今天的 HH:MM），不是三个月前的日期
+shown = None
+group_it = app2.store.get_iter_first()
+while group_it is not None:
+    child = app2.store.iter_children(group_it)
+    while child is not None:
+        if app2.store[child][gui.C_NAME] == 'doc-250.docx':
+            shown = app2.store[child][gui.C_WHEN]
+        child = app2.store.iter_next(child)
+    group_it = app2.store.iter_next(group_it)
+print('  「最近打开」列: %s' % shown)
+check(bool(shown) and len(shown) == 5 and shown[2] == ':',
+      '列里显示今天的时刻，不是旧日期', shown)
+check(app2._columns['mtime'].get_title() == '最近打开',
+      '列名跟着语义走', app2._columns['mtime'].get_title())
+
+# 点表头排序时也用同一个尺度（否则点一下顺序就变回按 mtime）
+app2.on_sort_clicked(app2._columns['mtime'], 'mtime')
+pump(0.6)
+if app2._sort and not app2._sort[1]:
+    app2.on_sort_clicked(app2._columns['mtime'], 'mtime')   # 切到降序
+pump(0.6)
+print('  排序状态: %s' % (app2._sort,))
+check(rows(app2)[0] == 'doc-250.docx', '按「最近打开」降序仍是它', rows(app2)[:3])
+app2.on_sort_clicked(app2._columns['mtime'], 'mtime')       # 回到默认分组
+pump(0.6)
+
+print('\n[8] 截图')
 app2.win.show_all()
 app2.win.present()
 app2.win.resize(1180, 760)

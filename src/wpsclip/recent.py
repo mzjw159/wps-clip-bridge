@@ -21,6 +21,12 @@
 3. **兜底数据源**（主源一条都读不出来时才启用）：GTK 的
    ``recently-used.xbel``、WPS 云文档本地目录里最近改过的文档。
 
+**顺序从哪来**：``files\\N\\path`` 里的 N 只是「该类型内部的位次」—— wps/et/
+pdf 各有一套、都从 1 开始，跨类型没法比。真正的顺序在
+``wps\\RecentFiles\\Sequence\\<编码路径>=<Unix 秒>``：那是**打开时间**，跨类型
+可比、也能拿来分「今天/昨天」。早期版本拿文件 mtime 当顺序，于是「打开一份
+老文档但不改内容」不会挪到最前面 —— 和 WPS 自己看到的顺序对不上。
+
 任何一层有收获就用，全都没有时由 :func:`diagnose` 给出**人话解释**，
 而不是让界面显示一句空的。
 """
@@ -71,6 +77,19 @@ _SPACE_RE = re.compile(
     r'^plugins\\officespace\\[^\n]*?\\openfilelist\\(\d+)\\(path|localpath)=(.*)$',
     re.M | re.I)
 
+# 打开时间表：``wps\RecentFiles\Sequence\<百分号编码的路径>=<Unix 秒>``
+#
+# 这是「最近文档」真正的排序依据。值限定 9~13 位数字（2001 年之后的秒级
+# 时间戳），免得把路径里恰好含「=数字」的情况误当成时间。路径部分用贪婪
+# 匹配：文件名里带 = 时，靠「值必须是纯数字」来定界才是安全的。
+_SEQ_RE = re.compile(
+    r'^(?:wps|et|wpp|pdf|ofd)\\RecentFiles\\Sequence\\(.+)=(\d{9,13})$',
+    re.M | re.I)
+
+# Sequence 的键是 WPS 自己的百分号编码：%UXXXX 表示一个 UTF-16 码点
+# （中文、空格都这么写），其余按标准 percent-encoding。
+_PCT_U = re.compile(r'%[Uu]([0-9a-fA-F]{4})')
+
 # 通用扫描：任何 key=value
 _ASSIGN_RE = re.compile(r'^([^=\n]+)=(.*)$', re.M)
 
@@ -104,6 +123,51 @@ def unesc(s):
         out.append(s[i])
         i += 1
     return ''.join(out)
+
+
+def unesc_pct(raw):
+    """还原 Sequence 的键：``%U6587`` 是一个 UTF-16 码点，``%20`` 是空格。
+
+    键写成 ``home\\shuai\\%U6587%U6863\\x.docx`` —— 反斜杠当分隔符、没有前导
+    斜杠，所以统一换成 ``/`` 并补上开头的 ``/``，否则 ``os.path.isfile`` 全
+    落空，整层顺序信息就白读了。
+    """
+    if not raw:
+        return ''
+    s = _PCT_U.sub(lambda m: chr(int(m.group(1), 16)), raw)
+    s = urllib.parse.unquote(s, errors='replace')
+    s = s.replace('\\', '/')
+    if s.startswith('file://'):
+        s = s[7:]
+    if s and not s.startswith('/'):
+        s = '/' + s
+    return s
+
+
+def parse_sequences(text):
+    """``{路径: 打开时间戳}``，同一文件被多个产品段打开过时取最新的那次。
+
+    WPS 自己也是这么排的（wps/et/pdf 打开同一份文档，各写一条记录），取最大
+    值才不会因为「先拿 PDF 打开、后拿 WPS 打开」把顺序排回去。
+    """
+    out = {}
+    for m in _SEQ_RE.finditer(text or ''):
+        path = unesc_pct(m.group(1))
+        if not path or not _is_doc(path):
+            continue
+        try:
+            ts = int(m.group(2))
+        except ValueError:
+            continue
+        if ts > out.get(path, 0):
+            out[path] = ts
+    return out
+
+
+def open_times():
+    """读打开时间表；没有配置文件时返回空字典。"""
+    data, _used = read_conf_text()
+    return parse_sequences(data) if data else {}
 
 
 # ---------------------------------------------------------------- 主数据源
@@ -268,13 +332,17 @@ def _rank(rows, limit):
 
 # ---------------------------------------------------------------- 汇总
 
-def collect(only_exist=True, allow_fallback=True):
-    """按层收集候选路径，返回 (路径列表, 统计)。
+def collect_meta(only_exist=True, allow_fallback=True):
+    """按层收集候选路径，返回 ``([(路径, 打开时间或 0)], 统计)``。
+
+    打开时间来自 WPS 的 Sequence 表，是「最近文档」的顺序依据；没有记录的
+    （兜底数据源、老版本 WPS 的配置）记 0，排序时退回文件修改时间。
 
     统计里带每一层的命中数，:func:`diagnose` 和 ``wps-copy --doctor`` 都靠它。
     """
     stats = {'conf': '', 'structured': 0, 'scanned': 0,
-             'conf_files': [], 'fallback': '', 'fallback_hits': 0}
+             'conf_files': [], 'fallback': '', 'fallback_hits': 0,
+             'opened': 0}
     paths = {}
 
     data, used = read_conf_text()
@@ -284,6 +352,8 @@ def collect(only_exist=True, allow_fallback=True):
             stats['conf_files'].append((p, os.path.getsize(p)))
         except OSError:
             pass
+
+    opened = parse_sequences(data) if data else {}
 
     if data:
         structured = _collect(data)
@@ -306,6 +376,12 @@ def collect(only_exist=True, allow_fallback=True):
                     paths.setdefault(p, label)
                 break
 
+    # 排序键：(有没有打开时间, 时间, mtime, 路径)。
+    #
+    # 第一个分量是档位：有 WPS 打开记录的整批排在前面。不这么分的话，
+    # 「一分钟前刚被别的软件改过、但 WPS 没打开过」的文件会压过「半分钟前
+    # 刚打开过」的文件 —— 用户明明看到 WPS 里它在第一，这边却是第二。
+    # 全都没有记录时（兜底数据源）档位相同，退化成按 mtime 排，行为不变。
     rows = []
     for p in paths:
         if only_exist and not os.path.isfile(p):
@@ -314,15 +390,23 @@ def collect(only_exist=True, allow_fallback=True):
             mt = os.path.getmtime(p)
         except OSError:
             mt = 0
-        rows.append((mt, p))
-    rows.sort(reverse=True)
+        ts = opened.get(p, 0)
+        rows.append((1 if ts else 0, ts or mt, mt, p))
+    rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]), reverse=True)
     stats['total'] = len(paths)
     stats['missing'] = len(paths) - len(rows)
-    return [p for _, p in rows], stats
+    stats['opened'] = sum(1 for row in rows if row[0])
+    return [(p, opened.get(p, 0)) for _tier, _when, _mt, p in rows], stats
+
+
+def collect(only_exist=True, allow_fallback=True):
+    """只返回路径列表（顺序同上）。给命令行、托盘这些不关心打开时间的地方用。"""
+    rows, stats = collect_meta(only_exist, allow_fallback)
+    return [p for p, _ts in rows], stats
 
 
 def parse_recent(limit=80, only_exist=True, allow_fallback=True):
-    """按文件修改时间倒序，返回最近文档的真实路径列表。"""
+    """按「最近打开」倒序（无记录时按修改时间），返回真实路径列表。"""
     paths, _ = collect(only_exist=only_exist, allow_fallback=allow_fallback)
     return paths[:limit]
 
@@ -355,6 +439,7 @@ def diagnose():
         'missing': len(paths) - len(exists),
         'fallback': st.get('fallback', ''),
         'fallback_hits': st.get('fallback_hits', 0),
+        'opened': st.get('opened', 0),
         'hint': '',
     }
 
@@ -494,25 +579,33 @@ def hit_spans(text, terms):
 
 
 # 表头能点的列：字段名 -> 中文名（状态栏和分组标题都要用）
+#
+# mtime 这一列显示的是「最近打开」而不是文件修改时间：这两件事在「最近文档」
+# 语境里，用户想的是前者（打开一份三个月前的老文档，它就该出现在今天）。
+# 没有打开时间记录时才退回文件修改时间。
 SORT_LABELS = {
     'name': '名称',
     'source': '来源',
     'type': '类型',
     'size': '大小',
-    'mtime': '修改时间',
+    'mtime': '最近打开',
     'dir': '所在文件夹',
 }
 
 
-def sort_entries(entries, field, reverse=False):
+def sort_entries(entries, field, reverse=False, opened=None):
     """按 field 排 ``[(path, size_bytes, mtime), ...]``，返回新列表。
 
     同名/同大小是常事，排序必须可重现，否则每次刷新顺序都在变、用户点不到
     刚才那一行。做法是先按 (文件名, 完整路径) 排一遍当基底，再做稳定排序 ——
     Python 的 sort 是稳定的，主键相同的行就保持基底顺序，升序时不会跟着翻转。
+
+    ``opened`` 是 ``{路径: 打开时间}``：按时间列排序时优先用它，没有记录才用
+    文件修改时间。这样点表头和默认视图是同一个尺度，不会点一下就换个顺序。
     """
     if field not in SORT_LABELS:
         raise ValueError('未知的排序列：%r' % (field,))
+    opened = opened or {}
 
     def primary(e):
         p, nbytes, mt = e
@@ -525,11 +618,15 @@ def sort_entries(entries, field, reverse=False):
         if field == 'size':
             return nbytes or 0
         if field == 'mtime':
-            return mt or 0
+            return opened.get(p) or mt or 0
         return os.path.dirname(p).lower()
 
     rows = sorted(entries, key=lambda e: (os.path.basename(e[0]).lower(), e[0]))
     rows.sort(key=primary, reverse=reverse)
+    if field == 'mtime':
+        # 档位单独再排一遍（稳定排序）：有打开记录的永远在前，且不受
+        # 升序/降序影响 —— 否则点一下「升序」会看到「没记录的文件」跑到最上面。
+        rows.sort(key=lambda e: 0 if opened.get(e[0]) else 1)
     return rows
 
 

@@ -10,7 +10,7 @@
 界面要点：
 - 左侧「来源」列用人话标注 云端 / 微信 / 本地（原来只显示 云/W/X 看不懂）；
   「类型」列单独标注 文档 / 表格 / 演示 / PDF。
-- 列表按修改时间分组：今天 / 昨天 / 近 3 天 / 近 7 天 / 近 30 天 / 更早。
+- 列表按最近打开分组：今天 / 昨天 / 近 3 天 / 近 7 天 / 近 30 天 / 更早。
 - 右键菜单：打开、打开所在位置、复制、复制路径、移到回收站。
 """
 import datetime
@@ -330,6 +330,9 @@ class App(object):
         self._kw = ''
         # 未过滤的完整列表：托盘菜单的「最近 5 个」用它，免得搜索时托盘跟着变
         self._all_paths = []
+        # {路径: WPS 记录的打开时间}。列表顺序、按天分组、「最近打开」列都看它；
+        # 没有记录的文件（兜底数据源、老配置）退回 st_mtime。
+        self._opened = {}
         self.wake_mtime = core.mtime(core.gui_wake_path())
         self.tray = None
         self._ticks = 0
@@ -529,9 +532,10 @@ class App(object):
         _fit(col, 'size', 80, min_width=64)
         view.append_column(col)
 
-        # 修改时间
+        # 最近打开（不是文件修改时间：打开老文档不会改 mtime，用户要看的是
+        # 「我什么时候用它」，而排序和分组都按这个）
         when_cell = Gtk.CellRendererText()
-        col = Gtk.TreeViewColumn('修改时间')
+        col = Gtk.TreeViewColumn('最近打开')
         col.pack_start(when_cell, True)
         col.set_cell_data_func(when_cell, self._plain_func(C_WHEN))
         _fit(col, 'mtime', 105, min_width=84)
@@ -964,8 +968,13 @@ class App(object):
         lines.append('详细自检：wps-copy --doctor')
         return '\n'.join(lines)
 
-    def _add_file(self, parent, p, mt=None, size=None, nbytes=None):
-        """往列表里插一行文件（分组行不走这里）。"""
+    def _add_file(self, parent, p, mt=None, size=None, nbytes=None, when=None):
+        """往列表里插一行文件（分组行不走这里）。
+
+        ``when`` 是这一行要显示的「最近打开」，默认等于文件修改时间。两者
+        分开传，是因为打开一份老文档不会改 mtime —— 只显示 mtime 的话，用户
+        会看到「今天」组里那一行写着三个月前，对不上。
+        """
         if mt is None or nbytes is None:
             try:
                 st = os.stat(p)
@@ -975,7 +984,8 @@ class App(object):
                 mt, size, nbytes = 0, '?', None
         self.store.append(parent, [
             False, type_icon(p), os.path.basename(p), source_of(p),
-            type_label(p), size, os.path.dirname(p), when_str(mt), p, mt,
+            type_label(p), size, os.path.dirname(p),
+            when_str(mt if when is None else when), p, mt,
             float(nbytes or 0)])
         self.rows.append(p)
         return mt
@@ -1027,7 +1037,7 @@ class App(object):
 
     # ------------------------------------------------ 排序
     def on_sort_clicked(self, _col, field):
-        """表头三态：升序 → 降序 → 回到默认（按修改时间分组）。
+        """表头三态：升序 → 降序 → 回到默认（按最近打开分组）。
 
         不做成 GTK 的 sort_column_id：模型排序会把分组行一起搬走，
         「今天/昨天」就散了。这里改成自己重排重填，顺序完全可控。
@@ -1111,7 +1121,13 @@ class App(object):
         limit = max(PAGE_LIMIT, core.conf_int('ui', 'limit', 80))
         # 一次读全量：搜索和筛选必须覆盖所有文档 —— 只在前 200 条里搜，
         # 用户会以为「明明有的文件不见了」。画多少条由 limit 另行控制。
-        all_paths, _stats = recent.collect()
+        #
+        # 用 collect_meta 而不是 collect：每一行要带上 WPS 记录的打开时间，
+        # 列表顺序、按天分组、「最近打开」列都按它算 —— 只打开不改内容的老
+        # 文档也能像 WPS 那样挪到最前面。
+        all_rows, _stats = recent.collect_meta()
+        all_paths = [p for p, _ts in all_rows]
+        self._opened = {p: ts for p, ts in all_rows if ts}
         # 托盘菜单的「最近 5 个」用完整列表：搜索和筛选都只是「看」的姿势，
         # 不该把「合上窗口也能随手复制最近文档」这条路径改窄。
         self._all_paths = list(all_paths)
@@ -1120,8 +1136,12 @@ class App(object):
             # 多个词是「并且」：每个词都要在名字或目录里出现
             return match_filter(p, tsel, ssel) and recent.match_terms(p, terms)
 
+        def when_of(p, mt):
+            """这一行显示的「最近打开」：WPS 有记录就用它，没有才退回 mtime。"""
+            return self._opened.get(p) or mt or 0
+
         def entries_of(items):
-            """[(路径, 字节数, 修改时间)]；stat 失败的大小记 None，显示成 ?。"""
+            """[(路径, 字节数, 文件修改时间)]；stat 失败的大小记 None，显示成 ?。"""
             out = []
             for p in items:
                 try:
@@ -1153,20 +1173,31 @@ class App(object):
             field, rev = self._sort
             sort_label = '按%s%s' % (recent.SORT_LABELS.get(field, field),
                                     '降序' if rev else '升序')
-            pinned_entries = recent.sort_entries(pinned_entries, field, rev)
-            rest_entries = recent.sort_entries(rest_entries, field, rev)
+            pinned_entries = recent.sort_entries(pinned_entries, field, rev,
+                                                 opened=self._opened)
+            rest_entries = recent.sort_entries(rest_entries, field, rev,
+                                               opened=self._opened)
             groups = [('按%s排序' % recent.SORT_LABELS.get(field, field),
                        rest_entries)]
         else:
             buckets = {}
             for p, nbytes, mt in rest_entries:
-                key, label = bucket_of(mt)
+                # 分组也看打开时间：打开一份三个月前的老文档，它今天就该在
+                # 「今天」组里 —— 这正是「最近文档」应有的样子。
+                key, label = bucket_of(when_of(p, mt))
                 buckets.setdefault(key, (label, []))[1].append((p, nbytes, mt))
             groups = []
             for key in sorted(buckets):
                 label, items = buckets[key]
                 if items:
-                    items.sort(key=lambda x: x[2], reverse=True)
+                    # 组内也是「有打开记录的在先」（和 collect 的档位一致），
+                    # 档内再按时间倒序。不加档位的话，一个刚被别的软件改过、
+                    # 但 WPS 没打开过的文件会压过刚打开过的那份。
+                    # 档位写成「有记录=1」而不是 0：这里 reverse=True，写 0 会被
+                    # 翻到后面去。
+                    items.sort(key=lambda x: (1 if self._opened.get(x[0]) else 0,
+                                              when_of(x[0], x[2]), x[2]),
+                               reverse=True)
                     groups.append((label, items))
 
         def add_group(label, items):
@@ -1174,7 +1205,7 @@ class App(object):
                 True, '', label, '', '', '%d 个' % len(items), '', '', '', 0.0, 0.0])
             for (p, nbytes, mt) in items:
                 size = '?' if nbytes is None else human_size(nbytes)
-                self._add_file(grow, p, mt, size, nbytes)
+                self._add_file(grow, p, mt, size, nbytes, when=when_of(p, mt))
 
         if pinned_entries:
             add_group('置顶', pinned_entries)
@@ -1210,7 +1241,7 @@ class App(object):
                             % (total, extra))
             if hidden:
                 self.status.set_tooltip_text(
-                    '列表一次最多显示前 %d 个（按修改时间）。\n'
+                    '列表一次最多显示前 %d 个（按最近打开）。\n'
                     '想找更早的文件，直接在搜索框输文件名 —— 搜索覆盖全部 %d 个，\n'
                     '不受这个上限影响。' % (limit, len(all_paths)))
             else:

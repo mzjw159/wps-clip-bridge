@@ -47,8 +47,14 @@ def _pad(s, width):
     return s + ' ' * max(0, width - _disp_width(s))
 
 
-def _stat(p):
-    """(大小文字, 修改时间文字, 时间戳, 字节数)。
+def _stat(p, opened=None):
+    """(大小文字, 最近打开文字, 用于排序的时间戳, 字节数, 文件修改时间)。
+
+    时间列显示「最近打开」而不是文件修改时间：清单顺序按它排，列却显示另一
+    个时间的话，第 1 行写着「03-15」而实际是今天刚打开的，自相矛盾。
+    ``opened`` 是 ``{路径: 打开时间}``，没有记录时才退回 st_mtime。
+    最后一项始终是 st_mtime —— ``--json`` 里两个时间都要给，脚本按老字段取
+    ``mtime`` 的习惯不能破。
 
     拿不到就退化，别让整行输出挂掉。``--json`` 里两个大小都给：人看的和
     脚本算的（"4.0 KB" 没法直接比较大小）。
@@ -56,18 +62,19 @@ def _stat(p):
     try:
         st = os.stat(p)
     except OSError:
-        return '?', '?', 0, 0
+        return '?', '?', 0, 0, 0
     import datetime
+    ts = (opened or {}).get(p) or st.st_mtime
     return (recent._fmt_size(st.st_size),
-            datetime.datetime.fromtimestamp(st.st_mtime).strftime('%m-%d %H:%M'),
-            st.st_mtime, st.st_size)
+            datetime.datetime.fromtimestamp(ts).strftime('%m-%d %H:%M'),
+            ts, st.st_size, st.st_mtime)
 
 
 def _entries(only_pinned=False):
     """清单条目：[(路径, 是否置顶)]。默认顺序与 ``wps-copy <序号>`` 一致。
 
-    序号按修改时间排（不是置顶在前）—— 这样老用户照着清单敲的序号含义没变，
-    置顶只在前面加个 ★ 做标记。
+    序号按「最近打开」排（不是置顶在前）—— 这样老用户照着清单敲的序号含义
+    没变，置顶只在前面加个 ★ 做标记。
     """
     pins = core.pinned_paths()
     if only_pinned:
@@ -113,12 +120,14 @@ def cmd_list(args):
             words.extend(recent.split_terms(a))
 
     rows = _entries(only_pinned=only_pinned)
+    # 时间列与 --sort mtime 都用这份「最近打开」表（缺记录的退回 st_mtime）
+    opened = recent.open_times()
     if words:
         rows = [(p, pin) for (p, pin) in rows if recent.match_terms(p, words)]
 
     if sort_field:
         # 排序要用原始字节数和时间戳；顺手把 stat 结果留着，下面打印不再重算
-        stats = {p: _stat(p) for p, _pin in rows}
+        stats = {p: _stat(p, opened) for p, _pin in rows}
         ordered = recent.sort_entries(
             [(p, stats[p][3], stats[p][2]) for p, _pin in rows],
             sort_field, reverse)
@@ -128,7 +137,7 @@ def cmd_list(args):
     if as_json:
         out = []
         for p, pin in rows:
-            size, when, mt, nbytes = _stat(p)
+            size, when, ts, nbytes, mtime = _stat(p, opened)
             out.append({
                 'path': p,
                 'name': os.path.basename(p),
@@ -137,7 +146,8 @@ def cmd_list(args):
                 'source': recent.source_of(p),
                 'size': size,
                 'size_bytes': nbytes,
-                'mtime': mt,
+                'mtime': mtime,
+                'opened': opened.get(p) or None,
                 'when': when,
                 'pinned': pin,
             })
@@ -163,7 +173,7 @@ def cmd_list(args):
     kind_w = max(_disp_width(recent.type_label(p)) for p, _ in rows)
     size_w = max(_disp_width(_stat(p)[0]) for p, _ in rows)
     for i, (p, pin) in enumerate(rows, 1):
-        size, when, _mt, _nb = _stat(p)
+        size, when, _ts, _nb, _mt = _stat(p, opened)
         # 大小右对齐（数字比宽度有意义），类型左对齐（中文还好，PDF 是三个字符）
         print('%*d. %s %s  %s  %s  %s'
               % (width, i, '★' if pin else ' ',
@@ -411,6 +421,12 @@ def cmd_doctor(_args):
         mark('bad', '没找到 WPS 配置文件，先确认装的是 WPS for Linux 并打开过一个文档。')
     print('    结构化解析 %d 条 / 通用扫描 %d 条 / 合计 %d 条 / 文件存在 %d 条'
           % (info['structured'], info['scanned'], info['total'], info['existing']))
+    print('    打开时间 %d 条（决定列表顺序；0 条时退回按文件修改时间）'
+          % info['opened'])
+    if info['existing'] and not info['opened']:
+        mark('warn', '一条打开时间都没读到 —— 列表会按文件修改时间排，'
+                     '「打开老文档但不修改」不会挪到最前面。'
+                     'WPS 可能改了 RecentFiles\\Sequence 的写法，见 docs/DATA-SOURCE.md。')
     if info['total'] and not info['structured']:
         mark('warn', '结构化解析一条都没命中，但通用扫描捞到了 %d 条 —— '
                      'WPS 大概改了键名（这正是备用解析存在的意义）。'

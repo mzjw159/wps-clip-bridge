@@ -580,5 +580,179 @@ class PaginateTest(unittest.TestCase):
         self.assertEqual(hidden, 1)
 
 
+class UnescPctTest(unittest.TestCase):
+    """Sequence 的键是另一套编码：%UXXXX 表示一个码点，键里没有前导斜杠。
+
+    这套编码和 files\\N\\path 的 \\xHH 完全不同，混用会让整层打开时间读不出来
+    （路径全是相对路径 → isfile 全 False → 顺序退回 mtime，bug 复现）。
+    """
+
+    def test_utf16_code_points(self):
+        # 真实写法：home\shuai\%U6587%U6863\a.docx（%U6587=文，%U6863=档）
+        self.assertEqual(recent.unesc_pct(r'home\shuai\%U6587%U6863\a.docx'),
+                         '/home/shuai/文档/a.docx')
+
+    def test_lowercase_u_also_accepted(self):
+        self.assertEqual(recent.unesc_pct('home/%u6587.docx'), '/home/文.docx')
+
+    def test_percent_space(self):
+        self.assertEqual(recent.unesc_pct('home/u/a%20b.docx'),
+                         '/home/u/a b.docx')
+
+    def test_adds_leading_slash(self):
+        self.assertEqual(recent.unesc_pct('home/u/a.docx'), '/home/u/a.docx')
+
+    def test_keeps_existing_leading_slash(self):
+        self.assertEqual(recent.unesc_pct('/home/u/a.docx'), '/home/u/a.docx')
+
+    def test_backslashes_become_slashes(self):
+        self.assertEqual(recent.unesc_pct(r'home\u\a.docx'), '/home/u/a.docx')
+
+    def test_file_uri_prefix_dropped(self):
+        self.assertEqual(recent.unesc_pct('file:///home/u/a.docx'),
+                         '/home/u/a.docx')
+
+    def test_ascii_untouched(self):
+        self.assertEqual(recent.unesc_pct('home/u/report.docx'),
+                         '/home/u/report.docx')
+
+    def test_empty(self):
+        self.assertEqual(recent.unesc_pct(''), '')
+
+
+class ParseSequencesTest(unittest.TestCase):
+    """打开时间表：同一文件多段记录取最新，非文档和坏值一律不收。"""
+
+    def test_basic(self):
+        text = 'wps\\RecentFiles\\Sequence\\home\\u\\a.docx=1792035355\n'
+        self.assertEqual(recent.parse_sequences(text),
+                         {'/home/u/a.docx': 1792035355})
+
+    def test_takes_latest_across_sections(self):
+        # 先用 PDF 打开、后用 WPS 打开：WPS 那次更晚，顺序应该跟着 WPS 走
+        text = ('pdf\\RecentFiles\\Sequence\\home\\u\\a.pdf=1792000000\n'
+                'wps\\RecentFiles\\Sequence\\home\\u\\a.pdf=1792100000\n')
+        self.assertEqual(recent.parse_sequences(text)['/home/u/a.pdf'],
+                         1792100000)
+
+    def test_skips_non_doc(self):
+        text = 'wps\\RecentFiles\\Sequence\\home\\u\\a.log=1792035355\n'
+        self.assertEqual(recent.parse_sequences(text), {})
+
+    def test_skips_non_numeric_value(self):
+        text = 'wps\\RecentFiles\\Sequence\\home\\u\\a.docx=abc\n'
+        self.assertEqual(recent.parse_sequences(text), {})
+
+    def test_ignores_short_numbers(self):
+        # 文件名里恰好带 =123 的情况不该被当成时间戳
+        text = 'wps\\RecentFiles\\Sequence\\home\\u\\a=123.docx=123\n'
+        self.assertEqual(recent.parse_sequences(text), {})
+
+    def test_handles_path_with_equals(self):
+        text = 'wps\\RecentFiles\\Sequence\\home\\u\\a=1.docx=1792035355\n'
+        self.assertEqual(recent.parse_sequences(text),
+                         {'/home/u/a=1.docx': 1792035355})
+
+    def test_empty_text(self):
+        self.assertEqual(recent.parse_sequences(''), {})
+        self.assertEqual(recent.parse_sequences(None), {})
+
+
+class OpenOrderTest(unittest.TestCase):
+    """顺序必须按「最近打开」，不能按文件 mtime —— 这是用户报的那个 bug。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='wpsorder_')
+        self.conf = os.path.join(self.tmp, 'Office.conf')
+        self._orig = (recent.CONF, recent.XBEL_CANDIDATES, recent.CLOUD_DIRS)
+        recent.CONF = self.conf
+        recent.XBEL_CANDIDATES = ()
+        recent.CLOUD_DIRS = ()
+
+    def tearDown(self):
+        (recent.CONF, recent.XBEL_CANDIDATES,
+         recent.CLOUD_DIRS) = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make(self, name, mtime):
+        p = os.path.join(self.tmp, name)
+        with open(p, 'w') as f:
+            f.write('x')
+        os.utime(p, (mtime, mtime))
+        return p
+
+    def test_opened_beats_mtime(self):
+        # old 半年前改的（mtime 很旧），但今天刚打开过；new 是昨天改的。
+        # 按 mtime 排 old 会在最后 —— 正是 bug 的表现；按打开时间 old 该在最前。
+        now = time.time()
+        old = self._make('old.docx', now - 86400 * 180)
+        new = self._make('new.docx', now - 86400)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % new)
+            f.write('wps\\RecentFiles\\files\\2\\path=%s\n' % old)
+            f.write('wps\\RecentFiles\\Sequence\\%s=%d\n'
+                    % (new.lstrip('/'), int(now - 3600)))
+            f.write('wps\\RecentFiles\\Sequence\\%s=%d\n'
+                    % (old.lstrip('/'), int(now - 60)))
+        self.assertEqual(recent.parse_recent(), [old, new])
+
+    def test_falls_back_to_mtime_without_record(self):
+        now = time.time()
+        a = self._make('a.docx', now - 3600)
+        b = self._make('b.docx', now - 60)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % a)
+            f.write('wps\\RecentFiles\\files\\2\\path=%s\n' % b)
+        self.assertEqual(recent.parse_recent(), [b, a])
+
+    def test_collect_meta_reports_opened(self):
+        now = time.time()
+        p = self._make('a.docx', now - 86400 * 30)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % p)
+            f.write('wps\\RecentFiles\\Sequence\\%s=%d\n'
+                    % (p.lstrip('/'), int(now - 60)))
+        rows, stats = recent.collect_meta()
+        self.assertEqual(rows, [(p, int(now - 60))])
+        self.assertEqual(stats['opened'], 1)
+
+    def test_collect_returns_paths_only(self):
+        now = time.time()
+        p = self._make('a.docx', now)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % p)
+        paths, stats = recent.collect()
+        self.assertEqual(paths, [p])
+        self.assertEqual(stats['opened'], 0)
+
+
+class SortOpenedTest(unittest.TestCase):
+    """点「最近打开」表头时和默认视图同一个尺度：打开时间优先。"""
+
+    def test_opened_overrides_mtime(self):
+        rows = [('/x/a.docx', 10, 100), ('/x/b.docx', 10, 200)]
+        got = [p for p, _n, _m in
+               recent.sort_entries(rows, 'mtime', reverse=True,
+                                   opened={'/x/a.docx': 999})]
+        self.assertEqual(got, ['/x/a.docx', '/x/b.docx'])
+
+    def test_missing_opened_uses_mtime(self):
+        rows = [('/x/a.docx', 10, 100), ('/x/b.docx', 10, 200)]
+        got = [p for p, _n, _m in
+               recent.sort_entries(rows, 'mtime', reverse=True)]
+        self.assertEqual(got, ['/x/b.docx', '/x/a.docx'])
+
+    def test_tier_ignores_direction(self):
+        # 升序时「没有打开记录」的也不能跑到最上面：有记录的永远在前
+        rows = [('/x/a.docx', 10, 100), ('/x/b.docx', 10, 200)]
+        got = [p for p, _n, _m in
+               recent.sort_entries(rows, 'mtime', opened={'/x/a.docx': 50})]
+        self.assertEqual(got[0], '/x/a.docx')
+
+    def test_label_is_open_not_modified(self):
+        # 列名跟着语义走：显示的是打开时间，不能叫「修改时间」
+        self.assertEqual(recent.SORT_LABELS['mtime'], '最近打开')
+
+
 if __name__ == '__main__':
     unittest.main()
