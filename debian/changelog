@@ -1,3 +1,24 @@
+wps-clip-bridge (1.11.2) unstable; urgency=medium
+
+  * 修设置窗口录不进 Ctrl+Alt+字母、Ctrl+Super+字母 这类组合键：按下之后
+    按钮一直停在「请按下组合键…」，只有单修饰键（Ctrl+T / Alt+T / Super+T）
+    能录进去。原因是桌面把这些组合注册成了自己的全局快捷键（麒麟默认就有
+    Ctrl+Alt+T 开终端、Ctrl+Alt+L 锁屏、Ctrl+Alt+E 打开文件管理器，装了截图
+    工具还有 Ctrl+Alt+X），它们在 X 层是 passive grab：按键在送达设置窗口之
+    前就被截走，窗口只收得到 Ctrl、Alt 两个修饰键，字母永远到不了。
+  * 录入期间改用 GDK 自己的连接做一次 active grab（X 协议里优先于 passive
+    grab），把字母夺回来，这几秒内桌面的热键也不会触发。必须走 GDK 的连接：
+    另开一个 Xlib 连接去 grab，事件会送到那个客户端，GTK 照样收不到（已实测）。
+  * 录完立刻探测该组合是否已被别人占着，被占就在按钮下面提示。能录进来不等于
+    能用 —— 保存后守护进程去抓，抢不过桌面仍然不会生效，早知道早换。
+  * 按下组合却没等到字母（Wayland 原生会话、或别的程序抓得更死）不再静默：
+    按钮会提示「没收到按键，可能被系统占用了」；识别不了的按键也不会再无反应。
+  * 新增 tools/probe-hotkey.py：用 xdotool 真发按键，并先用另一个 X 连接占住
+    Ctrl+Alt+C / Ctrl+Alt+T 模拟桌面，23 项断言覆盖录入、Esc/Delete、占用提示。
+  * 测试 375 → 378。
+
+ -- shuai <shuai@localhost>  Sat, 31 Oct 2026 20:20:00 +0800
+
 wps-clip-bridge (1.11.1) unstable; urgency=medium
 
   * 列表顺序按 WPS 的「最近打开」排，不再按文件修改时间：打开一份排在后面

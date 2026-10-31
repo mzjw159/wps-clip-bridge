@@ -117,6 +117,47 @@ def grab_all(d, mask, keyname):
     return grabbed, len(errors)
 
 
+def combo_conflicts(text):
+    """探测组合键是不是已经被别的程序占了，返回被占的修饰状态组数（0~4）。
+
+    ``0`` 表示四组修饰状态（大写锁/数字锁的四种组合）都抓得到，也就是这个
+    组合空着；``None`` 表示压根解析不了或者连不上 X，调用方别拿它报错。
+
+    为什么要单独探测：桌面的全局快捷键（Ctrl+Alt+T 开终端、Ctrl+Alt+X 截图）
+    在 X 层是 passive grab，我们的守护进程启动时抢不过它，只会静默失效。
+    设置窗口在用户刚录完键的时候探一次，就能当场告诉他「这个组合被占了」，
+    而不是保存完再弹一句「没抢到」。
+
+    探测期间确实会短暂抓住这个键，抓完立刻全部放开，返回前就释放干净。
+    """
+    parsed = parse_combo(text)
+    if not parsed or not parsed[0]:
+        return None
+    mask, keyname = parsed
+    try:
+        d = display.Display(core.conf('bridge', 'display', '') or None)
+    except Exception as ex:
+        core.log('探测快捷键占用时连不上 X: %r' % (ex,))
+        return None
+    try:
+        grabbed, bad = grab_all(d, mask, keyname)
+        try:
+            # 这一次连接只用来探测，把所有抓取一次性放掉
+            d.screen().root.ungrab_key(X.AnyKey, X.AnyModifier)
+            d.sync()
+        except Exception:
+            pass
+        if not grabbed and not bad:
+            # 键名没有对应 keycode：不是「被占用」，别吓唬用户
+            return None
+        return bad
+    finally:
+        try:
+            d.close()
+        except Exception:
+            pass
+
+
 def launch_gui():
     """已在运行就摸一下唤醒文件，让旧窗口跳到前台。"""
     if core.is_running('gui'):

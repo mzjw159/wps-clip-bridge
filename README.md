@@ -135,6 +135,10 @@ rm -rf ~/.config/wps-clip-bridge ~/.local/state/wps-clip-bridge
 > `Ctrl+Shift+C` 在终端、VS Code 里常被用作「复制」，全局热键会优先截获它。介意
 > 的话在设置里换成 `Ctrl+Shift+Alt+C` 之类，两组键都能改。
 
+设置里录组合键时，就算某个组合已经被桌面当作全局快捷键（比如 `Ctrl+Alt+T` 开终端），
+也能录进来；录完如果发现它确实被别的程序占着，按钮下面会给出提示 —— 那种组合
+保存后大概率抢不到。
+
 ### 2. 图形窗口
 
 应用菜单 →「WPS 最近文档」，或：
@@ -299,6 +303,15 @@ rm -rf ~/.cache/ukui ~/.cache/icon-cache.kcache
 </details>
 
 <details>
+<summary><b>在设置里按 Ctrl+Alt+字母 录不进去</b></summary>
+
+1.11.2 已修：桌面把这些组合注册成了自己的全局快捷键（`Ctrl+Alt+T` 开终端之类），
+按键在 X 层被截走，设置窗口只收得到修饰键。现在录入时会主动抓一次键盘把字母夺回来，
+录完还会提示该组合是否已被占用。细节见
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)。
+</details>
+
+<details>
 <summary><b>热键按了没反应</b></summary>
 
 多半是被别的程序占用了：抢不到时会弹通知并写日志，在设置里换一个组合键。另外全局
@@ -376,7 +389,7 @@ python3 -m wpsclip.daemon        # 看护进程
 
 ### 测试
 
-375 个用例，不需要图形界面，也不碰你的真实配置（每个用例都在临时目录里跑）：
+378 个用例，不需要图形界面，也不碰你的真实配置（每个用例都在临时目录里跑）：
 
 ```sh
 python3 -m unittest discover -s tests        # 全跑，约 10 秒

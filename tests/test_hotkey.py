@@ -127,5 +127,24 @@ class DefaultHotkeyTest(unittest.TestCase):
         self.assertTrue(mask)
 
 
+class ComboConflictsGuardTest(unittest.TestCase):
+    """占用探测在「问不出答案」时必须返回 None，不能报 0 也不能抛。
+
+    设置窗口拿这个返回值决定要不要提示「已被其它程序占用」，误报会把用户
+    吓得换掉一个好用的组合键。
+    """
+
+    def test_empty_combo(self):
+        self.assertIsNone(hotkey.combo_conflicts(''))
+
+    def test_modifiers_only(self):
+        # 只有修饰键、没有主键：不是组合键
+        self.assertIsNone(hotkey.combo_conflicts('<Control><Alt>'))
+
+    def test_bare_key(self):
+        # 没有修饰键的组合设置里也不允许，别去真抓一个裸键
+        self.assertIsNone(hotkey.combo_conflicts('c'))
+
+
 if __name__ == '__main__':
     unittest.main()

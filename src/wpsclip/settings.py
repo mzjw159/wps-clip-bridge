@@ -6,12 +6,14 @@
 写入 config.ini → 应用主题 → 重启热键进程 → 切换自启项。
 """
 import subprocess
+import time
+import weakref
 
 import gi
 
 gi.require_version('Gdk', '3.0')
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from . import core, service  # noqa: E402
 
@@ -33,6 +35,10 @@ MOD_KEYS = {
 
 PRETTY = (('<Control>', 'Ctrl+'), ('<Alt>', 'Alt+'), ('<Shift>', 'Shift+'),
           ('<Super>', 'Super+'))
+
+# 录入最多等这么久。抓键盘期间所有按键都进本窗口，用户要是点了按钮就走开，
+# 不放手的键盘会让人以为电脑卡住了。
+CAPTURE_TIMEOUT = 20
 
 
 # ------------------------------------------------------------------ 主题
@@ -172,15 +178,41 @@ def pretty_combo(combo):
 
 
 class HotkeyButton(Gtk.Button):
-    """点一下，按下组合键即录入。至少要求一个 Ctrl/Alt/Super 修饰键。"""
+    """点一下，按下组合键即录入。至少要求一个 Ctrl/Alt/Super 修饰键。
 
-    def __init__(self, combo=''):
+    录入期间会主动抓一次键盘。原因是桌面自己注册了一堆全局快捷键
+    （Ctrl+Alt+T 开终端、Ctrl+Alt+X 截图、Ctrl+Alt+L 锁屏…），它们在 X 层
+    是 passive grab：按键在送达到本窗口之前就被截走了，这里只收得到 Ctrl、
+    Alt 两个修饰键，真正的字母永远到不了 —— 用户看到的就是「按了没反应」，
+    而且原先连个提示都没有。
+
+    X 协议规定 active grab 优先于 passive grab，所以录入时抓一把键盘就能把
+    字母夺回来（顺便让桌面的热键在这几秒内不触发）。必须用 GDK 自己的连接
+    去抓（:func:`Gdk.keyboard_grab`）：另开一个 Xlib 连接的 active grab 会把
+    事件送进另一个客户端，GTK 这边还是收不到。
+    """
+
+    # 还活着的录入按钮：同时只允许一个在录，否则一次按键会被两个框同时吃掉
+    _live = weakref.WeakSet()
+
+    def __init__(self, combo='', skip=(), notify=None):
         Gtk.Button.__init__(self)
         self.combo = combo or ''
+        # 这些组合键是「自己」正在用的，探测占用时要跳过，否则会把自己当占用者
+        self.skip = set(skip)
+        # 录完键的回调（参数是 self），设置窗口用它更新占用提示
+        self.on_combo = notify
+        self.taken = ''          # 探测到的「已被占用」提示，空字符串表示没有
         self._capturing = False
         self._handler = None
+        self._release_handler = None
+        self._grabbed = False
+        self._mod_at = 0.0
+        self._gen = 0
+        self._timer = None
         self._refresh()
         self.connect('clicked', self._start_capture)
+        self.connect('destroy', lambda *_a: self._stop_capture())
 
     def _refresh(self):
         if self._capturing:
@@ -188,23 +220,92 @@ class HotkeyButton(Gtk.Button):
         else:
             self.set_label(pretty_combo(self.combo))
 
+    def _hint(self, text, seconds=1.8):
+        """临时把按钮文字换成一句提示，过一会儿自己恢复。"""
+        if not self._capturing:
+            return
+        gen = self._gen
+        self.set_label(text)
+
+        def restore():
+            if self._capturing and gen == self._gen:
+                self._refresh()
+            return False
+
+        GLib.timeout_add(int(seconds * 1000), restore)
+
     def _start_capture(self, *_):
         if self._capturing:
             return
-        self._capturing = True
-        self._refresh()
         top = self.get_toplevel()
+        if top is None or top.get_window() is None:
+            return
+        # 两个按钮各自往同一个顶层窗口上挂 key-press 处理器：不先把另一个收掉，
+        # 一次按键会被两边同时吃到，两个框变成同一个组合键。
+        for other in HotkeyButton._live:
+            if other is not self and other._capturing:
+                other._stop_capture()
+        HotkeyButton._live.add(self)
+        self._capturing = True
+        self._gen += 1
+        self._mod_at = 0.0
+        self.taken = ''
+        self._refresh()
         self._handler = top.connect('key-press-event', self._on_key, top)
+        self._release_handler = top.connect('key-release-event',
+                                           self._on_key_release, top)
+        self._grab_keyboard(top)
+        self._timer = GLib.timeout_add_seconds(CAPTURE_TIMEOUT, self._on_timeout)
+
+    def _on_timeout(self):
+        self._timer = None
+        if self._capturing:
+            core.log('录入快捷键超时，自动退出')
+            self._stop_capture()
+        return False
+
+    def _grab_keyboard(self, top):
+        """录入期间独占键盘，压过桌面的全局快捷键。失败也只是退化成老样子。"""
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                # 这个接口在 GTK 3.16 起标了 deprecated，但没有替代品：
+                # Gdk.Seat.grab 在本机的 typelib 里缺 SeatGrabOwnership
+                warnings.simplefilter('ignore', DeprecationWarning)
+                status = Gdk.keyboard_grab(top.get_window(), True, Gdk.CURRENT_TIME)
+            self._grabbed = (status == Gdk.GrabStatus.SUCCESS)
+        except Exception as ex:
+            core.log('录入快捷键时抓键盘失败: %r' % (ex,))
+            self._grabbed = False
+        if not self._grabbed:
+            core.log('录入快捷键时没抓到键盘，桌面的全局快捷键仍会抢键')
 
     def _stop_capture(self):
         self._capturing = False
-        top = self.get_toplevel()
-        if self._handler is not None and top is not None:
+        self._gen += 1
+        if self._timer is not None:
             try:
-                top.disconnect(self._handler)
+                GLib.source_remove(self._timer)
             except Exception:
                 pass
-        self._handler = None
+            self._timer = None
+        if self._grabbed:
+            try:
+                Gdk.keyboard_ungrab(Gdk.CURRENT_TIME)
+            except Exception:
+                pass
+            self._grabbed = False
+        top = self.get_toplevel()
+        if top is not None:
+            for attr in ('_handler', '_release_handler'):
+                hid = getattr(self, attr, None)
+                if hid is not None:
+                    try:
+                        top.disconnect(hid)
+                    except Exception:
+                        pass
+                setattr(self, attr, None)
+        HotkeyButton._live.discard(self)
         self._refresh()
 
     def _on_key(self, _w, event, top):
@@ -212,6 +313,9 @@ class HotkeyButton(Gtk.Button):
             return False
         name = Gdk.keyval_name(event.keyval)
         if name is None:
+            # 有些布局下按出来的键没有 keysym 名字（Unicode 私有区之类）。
+            # 原来直接 return，界面上什么都不发生，看着就像卡住了。
+            self._hint('这个键识别不了，换一个')
             return True
         if name == 'Escape':
             self._stop_capture()
@@ -219,9 +323,12 @@ class HotkeyButton(Gtk.Button):
         if name in ('BackSpace', 'Delete'):
             self.combo = ''
             self._stop_capture()
+            self._notify()
             return True
         if name in MOD_KEYS:
             # 只按了修饰键，继续等真正的按键
+            if not self._mod_at:
+                self._mod_at = time.time()
             return True
 
         mods = event.state & MOD_BITS
@@ -236,7 +343,7 @@ class HotkeyButton(Gtk.Button):
             mask |= 0x40
         if mask == 0:
             # 没有 Ctrl/Alt/Super 会把整个键盘抓走，不允许
-            self.set_label('需要搭配 Ctrl / Alt / Super')
+            self._hint('需要搭配 Ctrl / Alt / Super')
             return True
 
         parts = []
@@ -251,8 +358,47 @@ class HotkeyButton(Gtk.Button):
 
         key = name.lower() if len(name) == 1 else name
         self.combo = ''.join(parts) + key
+        self._mod_at = 0.0
         self._stop_capture()
+        self._check_taken()
+        self._notify()
         return True
+
+    def _on_key_release(self, _w, event, top):
+        """修饰键松手时还没有字母到手，基本就是被别的程序截走了。"""
+        if not self._capturing:
+            return False
+        if Gdk.keyval_name(event.keyval) not in MOD_KEYS:
+            return False
+        if self._mod_at and time.time() - self._mod_at >= 0.25:
+            self._mod_at = 0.0
+            self._hint('没收到按键，可能被系统占用了')
+        return False
+
+    def _check_taken(self):
+        """录完立刻探一下这个组合会不会已经被别人占了。
+
+        能录到只说明「刚才那一刻」active grab 压住了对方；保存后守护进程再
+        去抓，抢不过桌面的话热键还是死。提前说一声比事后发通知好。
+        """
+        combo = self.combo
+        self.taken = ''
+        if not combo or combo in self.skip:
+            return
+        try:
+            from . import hotkey
+            if hotkey.combo_conflicts(combo):
+                self.taken = pretty_combo(combo)
+        except Exception as ex:
+            core.log('探测快捷键占用失败: %r' % (ex,))
+
+    def _notify(self):
+        if callable(self.on_combo):
+            try:
+                self.on_combo(self)
+            except Exception as ex:
+                core.log('快捷键录入回调失败: %r' % (ex,))
+
 
 
 # ------------------------------------------------------------------ 设置窗口
@@ -311,14 +457,17 @@ class SettingsDialog(Gtk.Dialog):
         self.hk_enabled.set_active(core.conf_bool('hotkey', 'enabled', True))
         grid.attach(self.hk_enabled, 0, 0, 2, 1)
 
-        self.btn_combo = HotkeyButton(core.conf('hotkey', 'combo', '<Control><Alt>c'))
+        self.btn_combo = HotkeyButton(core.conf('hotkey', 'combo', '<Control><Alt>c'),
+                                      skip=self._own_combos(),
+                                      notify=self._check_hotkeys)
         grid.attach(self._label('唤起窗口'), 0, 1, 1, 1)
         grid.attach(self.btn_combo, 1, 1, 1, 1)
 
         self.copy_enabled = Gtk.CheckButton(label='启用')
         self.copy_enabled.set_active(core.conf_bool('hotkey', 'copy_enabled', True))
         self.btn_copy_combo = HotkeyButton(
-            core.conf('hotkey', 'copy_combo', '<Control><Shift>c'))
+            core.conf('hotkey', 'copy_combo', '<Control><Shift>c'),
+            skip=self._own_combos(), notify=self._check_hotkeys)
         row = Gtk.Box(spacing=8)
         row.pack_start(self.btn_copy_combo, False, False, 0)
         row.pack_start(self.copy_enabled, False, False, 0)
@@ -327,11 +476,20 @@ class SettingsDialog(Gtk.Dialog):
 
         hint = Gtk.Label()
         hint.set_markup('<span size="small">点按钮后直接按下组合键（至少带一个修饰键）；'
-                        'Delete 键清空，Esc 取消。</span>')
+                        'Delete 键清空，Esc 取消。Ctrl+Alt+T 这类被系统占用的组合'
+                        '也能录进来。</span>')
         hint.set_xalign(0)
         hint.set_line_wrap(True)
         hint.get_style_context().add_class('dim-label')
         grid.attach(hint, 0, 3, 2, 1)
+
+        # 录完键发现组合已被别的程序占用时，在这里说清楚
+        self.hk_warn = Gtk.Label()
+        self.hk_warn.set_xalign(0)
+        self.hk_warn.set_line_wrap(True)
+        self.hk_warn.set_no_show_all(True)
+        self.hk_warn.get_style_context().add_class('dim-label')
+        grid.attach(self.hk_warn, 0, 4, 2, 1)
         box.pack_start(grid, False, False, 0)
 
         # ---- 外观
@@ -475,6 +633,29 @@ class SettingsDialog(Gtk.Dialog):
                 core.log('打开官网失败: %r' % (ex,))
         return True
 
+    @staticmethod
+    def _own_combos():
+        """当前配置里正在用的两个组合键。
+
+        探测「是否被别人占用」时要跳过它们 —— 占用者其实是我们自己的热键
+        进程，报出来只会误导用户。
+        """
+        return tuple(c for c in (core.conf('hotkey', 'combo', ''),
+                                 core.conf('hotkey', 'copy_combo', '')) if c)
+
+    def _check_hotkeys(self, *_):
+        """录完键后更新「这个组合被占了」的提示。"""
+        taken = [b.taken for b in (self.btn_combo, self.btn_copy_combo) if b.taken]
+        if not taken:
+            self.hk_warn.hide()
+            return False
+        self.hk_warn.set_markup(
+            '<span size="small">⚠ %s 已被其它程序占用（多半是系统的全局快捷键），'
+            '保存后这个快捷键大概率抢不到，换一个更稳妥。</span>'
+            % '、'.join(taken))
+        self.hk_warn.show()
+        return False
+
     def set_error(self, text):
         """显示/收起底部的校验提示（空字符串即收起）。"""
         self.error.set_text(text or '')
@@ -563,10 +744,13 @@ class SettingsDialog(Gtk.Dialog):
         d = core.DEFAULTS
         self.hk_enabled.set_active(d['hotkey']['enabled'] == 'true')
         self.btn_combo.combo = d['hotkey']['combo']
+        self.btn_combo.taken = ''
         self.btn_combo._refresh()
         self.copy_enabled.set_active(d['hotkey']['copy_enabled'] == 'true')
         self.btn_copy_combo.combo = d['hotkey']['copy_combo']
+        self.btn_copy_combo.taken = ''
         self.btn_copy_combo._refresh()
+        self.hk_warn.hide()
         for i, (key, _l) in enumerate(THEMES):
             if key == d['ui']['theme']:
                 self.theme_combo.set_active(i)

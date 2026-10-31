@@ -44,6 +44,18 @@ DISPLAY=:99 python3 tools/probe-gui.py     # 全部通过时退出码 0
 这套探针抓过两个单测抓不到的 bug：`CellRendererText.markup` 是只写属性
 （`get_property` 会抛），以及窗口尺寸变化引起的列宽重算会被误当成用户拖动。
 
+快捷键录入另有一个探针，它用 xdotool 真发按键，并先用另一个 X 连接把
+`Ctrl+Alt+C`、`Ctrl+Alt+T` 占住，模拟「桌面已经把这些组合当全局快捷键」：
+
+```sh
+DISPLAY=:99 python3 tools/probe-hotkey.py  # 0 全过 / 1 有失败 / 2 环境不支持
+```
+
+它守的是这个坑：桌面的全局快捷键在 X 层是 passive grab，按键会被截走，设置
+窗口只收得到修饰键、收不到字母，表现就是「按了没反应」。录入时必须用 GDK
+自己的连接做一次 active grab（`Gdk.keyboard_grab`）才能把字母夺回来；换成
+另开一个 Xlib 连接去 grab 是不行的 —— 事件会送到那个客户端，GTK 还是收不到。
+
 ## 发版
 
 **推荐走 CI：推一个 tag 就发完**，不依赖谁的本机环境装了什么。CI 跑在
