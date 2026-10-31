@@ -5,10 +5,10 @@ Codename: stable
 Architectures: all
 Components: main
 Description: WPS 最近文档 - 自建 apt 源（未签名，需 [trusted=yes]）
-Date: Sat, 31 Oct 2026 11:41:56 +0000
+Date: Sat, 31 Oct 2026 12:14:57 +0000
 MD5Sum:
- ae05e0521aa730393e3725be55873bdc 9984 main/binary-all/Packages
- 4ab0651fcaaa7540834a9f78afd31102 1752 main/binary-all/Packages.gz
+ 2c16bedcf9640144dccfa69c0d485b21 11653 main/binary-all/Packages
+ a28cb2b26def75ad56b3f1254dfff07a 1853 main/binary-all/Packages.gz
 SHA256:
- 985aaf2af26e214c153216b143079f9382ad19a08140af7036c8730a524084a8 9984 main/binary-all/Packages
- a271b574867c3e511e8a0d954694ca36232e3df8ce003fa58ec6172d33917895 1752 main/binary-all/Packages.gz
+ 8358e293348db85e8c389935f9c429ca324950794bd7186223934a4bd9d29fd3 11653 main/binary-all/Packages
+ bf5c01bc24a149807aad4afbcdc9142f85df4dc7e339eab67b9977dd8a9a1693 1853 main/binary-all/Packages.gz
