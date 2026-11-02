@@ -754,5 +754,124 @@ class SortOpenedTest(unittest.TestCase):
         self.assertEqual(recent.SORT_LABELS['mtime'], '最近打开')
 
 
+class CloudOpenTest(unittest.TestCase):
+    """云端文档也要参与「最近打开」排序。
+
+    用户报的现象：刚在 WPS 里打开过云端文档，列表里能看到它，但托盘「最近
+    5 个」里没有、快捷键复制也复制不到 —— 因为它只有 openfilelist 里的记录，
+    没有 Sequence 的打开时间，被「有记录的在先」压到了最后。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='wpscloud_')
+        self.conf = os.path.join(self.tmp, 'Office.conf')
+        self._orig = (recent.CONF, recent.XBEL_CANDIDATES, recent.CLOUD_DIRS)
+        recent.CONF = self.conf
+        recent.XBEL_CANDIDATES = ()
+        recent.CLOUD_DIRS = ()
+        self.cloud_dir = os.path.join(self.tmp, 'WPS Cloud Files')
+
+    def tearDown(self):
+        (recent.CONF, recent.XBEL_CANDIDATES,
+         recent.CLOUD_DIRS) = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make(self, name, mtime, sub='.1/cachedata/AAA'):
+        d = os.path.join(self.cloud_dir, sub)
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, name)
+        with open(p, 'w') as f:
+            f.write('x')
+        os.utime(p, (mtime, mtime))
+        return p
+
+    @staticmethod
+    def _openlist(p, idx=1):
+        # 真实写法：键是转义过的绝对路径，值是路径本身
+        return 'plugins\\officespace\\usercenter\\u\\openfilelist\\%d\\path=%s\n' % (idx, p)
+
+    @staticmethod
+    def _seq(p, ts):
+        return 'wps\\RecentFiles\\Sequence\\%s=%d\n' % (p.lstrip('/'), ts)
+
+    def test_paths_parsed(self):
+        now = time.time()
+        p = self._make('云文档.docx', now)
+        got = recent.cloud_open_paths(self._openlist(p))
+        self.assertEqual(got, {p})
+
+    def test_non_doc_ignored(self):
+        now = time.time()
+        p = self._make('日志.log', now)
+        self.assertEqual(recent.cloud_open_paths(self._openlist(p)), set())
+
+    def test_time_from_same_name_sequence(self):
+        # 缓存换过哈希：Sequence 记的是旧缓存（已不存在），openfilelist 里是新的
+        now = int(time.time())
+        p = self._make('报告.docx', now - 86400 * 9)
+        stale = p.replace('/cachedata/AAA/', '/cachedata/OLD/')
+        text = (self._openlist(p) + self._seq(stale, now - 60))
+        self.assertEqual(recent.parse_open_times(text).get(p), now - 60)
+
+    def test_falls_back_to_cache_mtime(self):
+        now = int(time.time())
+        p = self._make('报告.docx', now - 120)
+        got = recent.parse_open_times(self._openlist(p))
+        self.assertEqual(got.get(p), now - 120)
+
+    def test_local_sequence_still_wins(self):
+        now = int(time.time())
+        p = self._make('报告.docx', now - 5000)
+        text = self._openlist(p) + self._seq(p, now - 30)
+        self.assertEqual(recent.parse_open_times(text).get(p), now - 30)
+
+    def test_cloud_ranks_before_never_opened(self):
+        # local 刚被别的软件改过（mtime 很新）但 WPS 没打开过；云端文档是昨天
+        # 打开的 —— 云端必须排在前面，否则托盘前 5 / 快捷键永远轮不到它。
+        now = time.time()
+        cloud = self._make('云文档.docx', now - 86400)
+        local = os.path.join(self.tmp, 'local.docx')
+        with open(local, 'w') as f:
+            f.write('x')
+        os.utime(local, (now - 60, now - 60))
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write(self._openlist(cloud))
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % local)
+        paths, _stats = recent.collect()
+        self.assertEqual(paths, [cloud, local])
+        self.assertEqual(recent.parse_recent(limit=1), [cloud])
+
+    def test_stats_counts_cloud(self):
+        now = time.time()
+        p = self._make('云文档.docx', now - 60)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write(self._openlist(p))
+        _rows, stats = recent.collect_meta()
+        self.assertEqual(stats['cloud_open'], 1)
+        self.assertEqual(stats['opened'], 1)
+
+    def test_missing_cache_dropped(self):
+        now = time.time()
+        gone = os.path.join(self.cloud_dir, '.1/cachedata/AAA/没了.docx')
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write(self._openlist(gone))
+        self.assertEqual(recent.collect()[0], [])
+
+    def test_newer_missing_finds_uncached_cloud_doc(self):
+        now = int(time.time())
+        have = self._make('有副本.docx', now - 600)
+        gone = os.path.join(self.cloud_dir, '.1/cachedata/BBB/没副本.docx')
+        opened = {have: now - 600, gone: now - 60}
+        self.assertEqual(recent.newer_missing(have, opened), gone)
+
+    def test_newer_missing_ignores_old_or_existing(self):
+        now = int(time.time())
+        have = self._make('有副本.docx', now - 600)
+        older_gone = os.path.join(self.cloud_dir, '.1/cachedata/BBB/旧.docx')
+        newer_have = self._make('也在.docx', now - 60, sub='.1/cachedata/CCC')
+        opened = {have: now - 600, older_gone: now - 900, newer_have: now - 30}
+        self.assertIsNone(recent.newer_missing(have, opened))
+
+
 if __name__ == '__main__':
     unittest.main()

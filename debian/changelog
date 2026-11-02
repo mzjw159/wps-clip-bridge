@@ -1,3 +1,26 @@
+wps-clip-bridge (1.11.3) unstable; urgency=medium
+
+  * 修云端文档不参与「最近打开」排序：刚在 WPS 里打开的云端文档，列表里能看
+    到、右键也能复制，但托盘「最近 5 个」里没有它，快捷键复制也永远复制不到。
+    原因是云端文档的打开记录根本不在 RecentFiles\Sequence 里，而在
+    plugins\officespace\usercenter\<用户>\openfilelist\<位次>\path，且本地缓存
+    路径带一段随同步变化的哈希（cachedata/<哈希>/<名字>.docx）——Sequence 里
+    记的那条常常指向早就没了的旧缓存。旧版只解析 RecentFiles，云端文档就成了
+    「没有打开记录的文件」，被「有记录的在先」这个档位压到列表最后。
+  * recent.parse_open_times：云端文档按「同名 Sequence 记录（缓存换哈希也能对
+    上）→ 本地缓存 mtime（WPS 打开云端文档时会写这份缓存）」补打开时间；补到
+    时间的云端文档和本地文档同级参与排序，托盘前 5、快捷键复制、按天分组都算
+    它。open_times() 同步使用新逻辑，命令行 --list 的时间列与顺序一致。
+  * 快捷键复制时，若 WPS 里更近的那条云端文档本地还没有缓存副本，通知里明说
+    「更近的「xxx」本地没有副本」—— 以前只会复制下一个文件，看起来就像云端
+    复制不了（recent.newer_missing，只看最近一天）。
+  * --doctor 多打一行「其中云端文档 N 条」，可以直接看出云端打开记录补上了几条。
+  * 界面探针新增 6 项断言覆盖云端排序（列表第一、今天分组、托盘前 5、快捷键取
+    到的那条、来源标记），共 25 项。
+  * 测试 378 → 388。
+
+ -- shuai <shuai@localhost>  Mon, 02 Nov 2026 09:30:00 +0800
+
 wps-clip-bridge (1.11.2) unstable; urgency=medium
 
   * 修设置窗口录不进 Ctrl+Alt+字母、Ctrl+Super+字母 这类组合键：按下之后

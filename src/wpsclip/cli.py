@@ -423,6 +423,9 @@ def cmd_doctor(_args):
           % (info['structured'], info['scanned'], info['total'], info['existing']))
     print('    打开时间 %d 条（决定列表顺序；0 条时退回按文件修改时间）'
           % info['opened'])
+    if info['cloud_open']:
+        print('    其中云端文档 %d 条（按 Sequence / 本地缓存时间补的记录）'
+              % info['cloud_open'])
     if info['existing'] and not info['opened']:
         mark('warn', '一条打开时间都没读到 —— 列表会按文件修改时间排，'
                      '「打开老文档但不修改」不会挪到最前面。'

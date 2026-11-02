@@ -32,6 +32,7 @@ pdf 各有一套、都从 1 开始，跨类型没法比。真正的顺序在
 """
 import os
 import re
+import time
 import urllib.parse
 
 # 主数据源（测试里会替换成临时文件）
@@ -75,6 +76,13 @@ _PATH_RE = re.compile(
 # 云文档 / 办公空间打开记录（打开过的云文件通常也在本地留了缓存副本）
 _SPACE_RE = re.compile(
     r'^plugins\\officespace\\[^\n]*?\\openfilelist\\(\d+)\\(path|localpath)=(.*)$',
+    re.M | re.I)
+
+# 同上，但只要 path：用来判断「哪些云端文档是 WPS 里打开过的」。
+# 位次 N 只是这份列表里的顺序（1 最旧、往后越新），不能当时间用 —— 云端文档
+# 的时间还得从 Sequence 或本地缓存里取，见 :func:`parse_open_times`。
+_CLOUD_IDX_RE = re.compile(
+    r'^plugins\\officespace\\[^\n]*?\\openfilelist\\(\d+)\\path=(.*)$',
     re.M | re.I)
 
 # 打开时间表：``wps\RecentFiles\Sequence\<百分号编码的路径>=<Unix 秒>``
@@ -164,10 +172,86 @@ def parse_sequences(text):
     return out
 
 
+def cloud_open_paths(text):
+    """WPS 打开过的云端文档（本地缓存路径）。
+
+    这些路径躺在 ``plugins\\officespace\\usercenter\\<用户>\\openfilelist\\N\\path``
+    里，和本地文档的 ``RecentFiles`` 是两套记录 —— 只解析 ``RecentFiles`` 的话，
+    用户明明在 WPS 里刚打开过云端文档，这边却当它是「没打开过的文件」。
+    """
+    out = set()
+    for m in _CLOUD_IDX_RE.finditer(text or ''):
+        raw = m.group(2).strip()
+        if not raw or '\n' in raw:
+            continue
+        p = unesc(raw)
+        if p.startswith('/') and _is_doc(p):
+            out.add(p)
+    return out
+
+
+def parse_open_times(text):
+    """``{路径: 最近打开时间}``：Sequence 为准，云端文档再补一层。
+
+    云端文档的本地缓存路径里带一段随同步变化的哈希
+    （``WPS Cloud Files/.<账号>/cachedata/<哈希>/<名字>.docx``），Sequence 记的
+    常常是上一份、早就没了的缓存；现在还能打开的那份只出现在 openfilelist 里。
+
+    少了这一层，云端文档拿不到打开时间，会被「有记录的在先」这个档位压到最后：
+    托盘最近 5 个轮不到它，快捷键复制也永远复制不到刚打开的云端文档。补的顺序：
+
+    1. 同名云文档的 Sequence 记录（缓存换了哈希，文件名还能对上）；
+    2. 本地缓存的 mtime（WPS 打开云端文档时会写这份缓存）。
+    """
+    out = parse_sequences(text)
+    cloud = cloud_open_paths(text)
+    if not cloud:
+        return out
+
+    by_name = {}
+    for p, ts in out.items():
+        if source_of(p) == '云端':
+            by_name.setdefault(os.path.basename(p), []).append(ts)
+
+    for p in cloud:
+        if p in out:
+            continue
+        ts = max(by_name.get(os.path.basename(p)) or [0])
+        if not ts:
+            try:
+                ts = int(os.path.getmtime(p))
+            except OSError:
+                ts = 0
+        if ts:
+            out[p] = ts
+    return out
+
+
 def open_times():
-    """读打开时间表；没有配置文件时返回空字典。"""
+    """读打开时间表（含云端文档的补录）；没有配置文件时返回空字典。"""
     data, _used = read_conf_text()
-    return parse_sequences(data) if data else {}
+    return parse_open_times(data) if data else {}
+
+
+def newer_missing(path, opened=None, window=86400):
+    """比 ``path`` 更晚打开、但本地没有文件的那一条；没有就返回 None。
+
+    典型就是云端文档：WPS 里排第一位，本地却还没有缓存副本，复制只能退到下一
+    个 —— 不说一句的话，用户会以为「快捷键复制不了云端文件」。``window`` 只
+    看最近一天，免得几个月前删掉的文件一直跳出来打扰。
+    """
+    opened = open_times() if opened is None else opened
+    target = opened.get(path) or 0
+    cutoff = time.time() - window
+    best = None
+    for p, ts in opened.items():
+        if p == path or ts <= target or ts < cutoff:
+            continue
+        if os.path.isfile(p):
+            continue
+        if best is None or ts > best[0]:
+            best = (ts, p)
+    return best[1] if best else None
 
 
 # ---------------------------------------------------------------- 主数据源
@@ -353,7 +437,11 @@ def collect_meta(only_exist=True, allow_fallback=True):
         except OSError:
             pass
 
-    opened = parse_sequences(data) if data else {}
+    # 打开时间：Sequence 是权威，云端文档再从 openfilelist + 缓存 mtime 补一层。
+    # 不补的话，刚打开的云端文档没有时间、被档位压到最后，托盘前 5 和快捷键
+    # 复制都轮不到它 —— 用户看到的就是「云端文件复制不了」。
+    opened = parse_open_times(data) if data else {}
+    cloud_paths = cloud_open_paths(data) if data else set()
 
     if data:
         structured = _collect(data)
@@ -396,6 +484,8 @@ def collect_meta(only_exist=True, allow_fallback=True):
     stats['total'] = len(paths)
     stats['missing'] = len(paths) - len(rows)
     stats['opened'] = sum(1 for row in rows if row[0])
+    # 云端文档里真正补到时间的条数（doctor 用它说明「云端也参与排序」）
+    stats['cloud_open'] = len(cloud_paths & set(opened))
     return [(p, opened.get(p, 0)) for _tier, _when, _mt, p in rows], stats
 
 
@@ -440,6 +530,7 @@ def diagnose():
         'fallback': st.get('fallback', ''),
         'fallback_hits': st.get('fallback_hits', 0),
         'opened': st.get('opened', 0),
+        'cloud_open': st.get('cloud_open', 0),
         'hint': '',
     }
 

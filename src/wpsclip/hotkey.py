@@ -217,8 +217,17 @@ def copy_latest():
     if ok:
         brief = service.describe(rows[:1])
         core.log('热键复制 %s -> 成功' % rows[0])
+        # WPS 里更近的那条如果是云端文档、本地还没缓存，复制只能退到下一个。
+        # 不说一句的话，用户只会觉得「快捷键复制不了云端文件」。
+        skipped = recent.newer_missing(rows[0])
+        if skipped:
+            body = '更近的「%s」本地没有副本（已删除，或云端文件还没缓存）' % \
+                os.path.basename(skipped)
+            core.log('跳过没有本地副本的 %s' % skipped)
+        else:
+            body = '切到桌面或微信按 Ctrl+V 即可粘贴'
         if core.conf_bool('ui', 'notify_on_copy', True):
-            service.notify('已复制 %s' % brief, '切到桌面或微信按 Ctrl+V 即可粘贴')
+            service.notify('已复制 %s' % brief, body)
     else:
         # 失败一定要说：不然用户只会觉得「按了没反应」
         core.log('热键复制 %s -> %s' % (rows[0], msg))

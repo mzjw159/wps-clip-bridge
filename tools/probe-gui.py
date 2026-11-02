@@ -38,7 +38,7 @@ import gi  # noqa: E402
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk  # noqa: E402
 
-from wpsclip import core, gui  # noqa: E402
+from wpsclip import core, gui, recent  # noqa: E402
 
 _BUIlD = os.path.join(_ROOT, 'build')
 os.makedirs(_BUIlD, exist_ok=True)
@@ -241,7 +241,35 @@ check(rows(app2)[0] == 'doc-250.docx', '按「最近打开」降序仍是它', r
 app2.on_sort_clicked(app2._columns['mtime'], 'mtime')       # 回到默认分组
 pump(0.6)
 
-print('\n[8] 截图')
+print('\n[8] 云端文档也按「最近打开」排（托盘前 5 和快捷键才轮得到）')
+# 用户报的 bug：刚在 WPS 里打开的云端文档，列表里看得到、右键也能复制，
+# 但托盘「最近 5 个」没有它、快捷键复制也复制不到 —— 因为它只有
+# openfilelist 里的记录，没有 Sequence 的打开时间，被「有记录的在先」压到最后。
+cloud_dir = os.path.join(H, '文档', 'WPS Cloud Files', '.491878967',
+                         'cachedata', 'PROBEHASH')
+os.makedirs(cloud_dir, exist_ok=True)
+cloud = os.path.join(cloud_dir, '云端-最近.docx')
+with open(cloud, 'w') as f:
+    f.write('x')
+os.utime(cloud, (now - 15, now - 15))       # 刚打开时写下的本地缓存
+with open(H + '/.config/Kingsoft/Office.conf', 'a') as f:
+    f.write('plugins\\officespace\\usercenter\\probe\\openfilelist\\1\\path=%s\n'
+            % cloud)
+print('  云端文档: %s' % os.path.basename(cloud))
+app2.reload()
+pump(0.8)
+names = rows(app2)
+check(names and names[0] == '云端-最近.docx', '刚打开的云端文档排到第一', names[:3])
+check(app2.store[app2.store.get_iter_first()][gui.C_NAME] == '今天',
+      '它进了「今天」组',
+      app2.store[app2.store.get_iter_first()][gui.C_NAME])
+tops = [p for _label, p in app2._tray_recent()]
+print('  托盘最近: %s' % [os.path.basename(p) for p in tops][:3])
+check(tops[:1] == [cloud], '托盘「最近 5 个」里有它', tops[:3])
+check(recent.parse_recent(limit=1) == [cloud], '快捷键复制取到的也是它')
+check(recent.source_of(cloud) == '云端', '来源仍标成「云端」')
+
+print('\n[9] 截图')
 app2.win.show_all()
 app2.win.present()
 app2.win.resize(1180, 760)
