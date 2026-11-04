@@ -1,4 +1,4 @@
-wps-clip-bridge (1.11.4) unstable; urgency=medium
+wps-clip-bridge (1.12.0) unstable; urgency=medium
 
   * 修「另存为到团队文档」的云端文档完全进不了列表：把文件另存到 WPS 团队
     文档后接着编辑，WPS 一条记录都不写 —— RecentFiles 没有，openfilelist 也
@@ -9,16 +9,20 @@ wps-clip-bridge (1.11.4) unstable; urgency=medium
     限深度 8 层）。它由 WPS 独占写入，mtime 就是可信的「最近动过」证据。
   * 排序档位调整：「有打开记录的」和「云同步目录里的」算同一档。否则刚另存到
     云文档、还没进 RecentFiles 的那份会被压到最后 —— 修了等于没修。
+  * 刷新按钮不再点了没反应：按下立刻把箭头换成转圈、状态栏写「正在刷新…」，
+    读完报出这一遍到底变了什么（新增 N 个 / N 个已不在 / 没有新文档），2.4 秒
+    后自己退回总数；刷新期间按钮变灰，防连点。新增 F5 与 Ctrl+R，走同一条路。
   * --doctor 多打一行「云同步目录补扫 N 条」；stats.opened 改为按真实记录数
     统计，不再把补扫进来的文件算成「读到了打开时间」。
-  * 界面探针新增 5 项断言（无记录云文档进列表、排第一、今天分组、托盘前 5、
-    快捷键取到它），共 30 项；顺带覆盖了路径里带 & 的目录名。
+  * 界面探针新增 19 项断言（云同步补扫 5 项 + 刷新反馈 14 项），共 44 项；顺带
+    覆盖了路径里带 & 的目录名，以及按下瞬间就该有的反馈（异步反馈改用条件
+    等待，不再靠固定 sleep，慢机器上不会偶发失败）。
+  * 测试 388 → 401。
   * 文档：DATA-SOURCE 补「WPS 压根不写记录」这一层，TROUBLESHOOTING 补
-    「刚另存到团队文档的那份列表里没有」；MAINTAINING 记下 Xvfb :99 残留会
-    让探针连到旧服务器、结果不可信。
-  * 测试 388 → 395。
+    「刚另存到团队文档的那份列表里没有」，MAINTAINING 记下 Xvfb :99 残留会
+    让探针连到旧服务器、结果不可信；README 补刷新反馈与 F5 / Ctrl+R。
 
- -- shuai <shuai@localhost>  Wed, 04 Nov 2026 10:55:00 +0800
+ -- shuai <shuai@localhost>  Wed, 04 Nov 2026 11:52:00 +0800
 
 wps-clip-bridge (1.11.3) unstable; urgency=medium
 

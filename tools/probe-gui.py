@@ -64,6 +64,17 @@ def pump(seconds=0.45):
         time.sleep(0.01)
 
 
+def wait_for(pred, seconds=5.0):
+    """等到 pred() 成立为止。界面上的异步反馈（刷新要转两圈才落字）不能
+    靠固定 sleep 断言 —— 慢一点的机器上就会偶发失败。"""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if pred():
+            return True
+        pump(0.05)
+    return pred()
+
+
 # ---------------------------------------------------------------- 假数据
 # 260 个文档：超过 PAGE_LIMIT(200)，用来验证「只画前 200 条」的提示，
 # 以及搜索能不能命中第 200 条之后的文件（以前只在前 200 条里搜）
@@ -295,7 +306,63 @@ check(tops[:1] == [team], '托盘「最近 5 个」里有它', tops[:3])
 check(recent.parse_recent(limit=1) == [team], '快捷键复制取到的也是它')
 check(recent.source_of(team) == '云端', '来源标成「云端」')
 
-print('\n[10] 截图')
+print('\n[10] 刷新按钮要给出反馈（用户报：点了完全没动静）')
+# reload() 是本机的几十毫秒活，列表没变时重画的结果和点之前一模一样、状态栏
+# 那句「共 N 个文档」也一字不差 —— 看起来就是按钮坏了。现在分三步：立刻换
+# 转圈 +「正在刷新…」、读完报出这一遍变了什么、几秒后把状态栏还给常规文案。
+app2.refresh_btn.clicked()
+# 这一刻是同步的（on_refresh 里先改界面再排 timeout），所以可以直接断言，
+# 用不着 sleep —— 也顺带钉住「点下去立刻有反应」这件事本身。
+instant = app2.status.get_text()
+print('  按下瞬间: %s' % instant)
+check(instant == '正在刷新…', '按下立刻有反应（「正在刷新…」）', instant)
+check(app2.refresh_btn.get_image() is app2.refresh_spinner,
+      '图标换成转圈（「按到了」最直观的证据）')
+check(not app2.refresh_btn.get_sensitive(), '刷新期间不可再点，防连点')
+check(app2.refresh_btn.get_tooltip_text() == '正在刷新…', '悬停文字也跟着变',
+      app2.refresh_btn.get_tooltip_text())
+
+check(wait_for(lambda: app2.status.get_text().startswith('已刷新')),
+      '读完后状态栏说「已刷新」', app2.status.get_text())
+note = app2.status.get_text()
+print('  结果: %s' % note)
+check('没有新文档' in note, '列表没变时明说「没有新文档」', note)
+check('共 ' in note, '后面接着常规文案（总数还在）', note)
+# 转圈会再留 0.3 秒（一闪而过等于没动），所以这里等它收回去
+check(wait_for(lambda: app2.refresh_btn.get_image() is app2.refresh_icon),
+      '图标换回刷新箭头')
+check(app2.refresh_btn.get_sensitive(), '按钮恢复可点')
+
+check(wait_for(lambda: app2.status.get_text().startswith('共 ')),
+      '几秒后状态栏还原成常规文案', app2.status.get_text())
+
+# WPS 那边真多了一份：刷新得说出「新增 1 个」，才对得起这个按钮
+newdoc = os.path.join(H, 'doc-新存的汇报.docx')
+with open(newdoc, 'w') as f:
+    f.write('x')
+with open(H + '/.config/Kingsoft/Office.conf', 'a') as f:
+    f.write('wps\\RecentFiles\\files\\999\\path=%s\n' % newdoc)
+app2.refresh_btn.clicked()
+check(wait_for(lambda: '新增 1 个' in app2.status.get_text()),
+      '多了一份就说「新增 1 个」', app2.status.get_text())
+print('  新增后: %s' % app2.status.get_text())
+check(newdoc in app2._all_paths, '新文档真的读进列表了')
+
+# 键盘也能刷新：刚在 WPS 里存完、切回来按一下，手不用离开键盘
+from gi.repository import Gdk  # noqa: E402
+pump(3.0)                        # 等上一条「已刷新」还原
+for _label, _kv, _state in (('F5', Gdk.KEY_F5, 0),
+                            ('Ctrl+R', Gdk.KEY_r, Gdk.ModifierType.CONTROL_MASK)):
+    ev = Gdk.EventKey()
+    ev.keyval = _kv
+    ev.state = _state
+    app2.on_key(app2.view, ev)
+    check(app2.status.get_text() == '正在刷新…', '%s 也能刷新（同一份反馈）' % _label,
+          app2.status.get_text())
+    wait_for(lambda: app2.status.get_text().startswith('已刷新'))
+    pump(3.0)
+
+print('\n[11] 截图')
 app2.win.show_all()
 app2.win.present()
 app2.win.resize(1180, 760)

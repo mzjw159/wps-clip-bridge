@@ -267,6 +267,42 @@ class HumanSizeTest(unittest.TestCase):
         self.assertEqual(gui.human_size(1024 ** 4), '1024.0 GB')
 
 
+@_need_gi
+class RefreshFeedbackTest(unittest.TestCase):
+    """刷新按钮的反馈文案。
+
+    这个按钮最容易「看起来是坏的」：reload 几十毫秒就完，列表没变时重画的
+    结果和点之前一模一样。所以文案必须把「这一遍到底变了没有」说清楚 ——
+    多一个「新增 1 个」、少一个「没有新文档」，用户才知道按钮是好的。
+    """
+
+    def test_added(self):
+        self.assertEqual(gui.refresh_diff(1, 0), '新增 1 个')
+        self.assertEqual(gui.refresh_diff(3, 0), '新增 3 个')
+
+    def test_gone(self):
+        self.assertEqual(gui.refresh_diff(0, 2), '2 个已不在')
+
+    def test_both(self):
+        # 一边新增一边有文件被删（或移走）：两种都要说，先增后减
+        self.assertEqual(gui.refresh_diff(2, 1), '新增 2 个、1 个已不在')
+
+    def test_nothing_changed(self):
+        # 最要紧的一条：没变化也得明说，否则和「按钮没反应」分不开
+        self.assertEqual(gui.refresh_diff(0, 0), '没有新文档')
+
+    def test_note_keeps_normal_text(self):
+        # 常规文案里有总数、筛选、排序、分页，不能丢，也不该复述一遍
+        normal = '共 42 个文档 · 筛选：表格'
+        self.assertEqual(gui.refresh_note('新增 1 个', normal),
+                         '已刷新：新增 1 个 · 共 42 个文档 · 筛选：表格')
+
+    def test_note_without_normal_text(self):
+        # 空列表时没有常规文案可拼，别留下一个孤零零的分隔符
+        self.assertEqual(gui.refresh_note('仍然没读到文档', ''),
+                         '已刷新：仍然没读到文档')
+
+
 
 @_need_gi
 class TrayRecentTest(unittest.TestCase):

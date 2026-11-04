@@ -112,6 +112,34 @@ def human_size(n):
     return str(n)
 
 
+def refresh_diff(added, gone):
+    """刷新后「这一遍变了什么」的一句话。
+
+    刷新按钮最容易显得没反应：reload() 是本机的几十毫秒活，列表没变时重画的
+    结果和点之前一模一样，状态栏那句「共 N 个文档」也一字不差 —— 用户只能再
+    点两下试试，那就是「点了没反应」的感觉。所以变了要说，没变更要说。
+    """
+    if added and gone:
+        return '新增 %d 个、%d 个已不在' % (added, gone)
+    if added:
+        return '新增 %d 个' % added
+    if gone:
+        return '%d 个已不在' % gone
+    return '没有新文档'
+
+
+def refresh_note(diff, normal):
+    """状态栏上的整句：刷新的结果放最前面，后面接常规文案。
+
+    常规文案里有总数、筛选、排序、分页这些上下文，另起一句会跟实际列表对不上
+    （筛选开着时列表只画几行，总数却是全部）。所以不重写，直接拼在前面 ——
+    状态栏本来就 ellipsize，要紧的字放在开头才不会被截掉。
+    """
+    if not normal:
+        return '已刷新：%s' % diff
+    return '已刷新：%s · %s' % (diff, normal)
+
+
 # 来源/类型的判断逻辑在 recent 里（命令行也要用），这里只留别名，界面内部
 # 继续叫这两个名字，测试与旧代码都不受影响。
 source_of = recent.source_of
@@ -338,6 +366,11 @@ class App(object):
         self._ticks = 0
         self._copy_seq = 0          # 复制请求序号，用来作废过期回调
         self._copy_busy = False
+        # 刷新按钮：_refreshing 挡连点；_refresh_before 是上一版清单，
+        # _last_paths 是最近一次 reload 读到的完整清单（见 on_refresh）。
+        self._refreshing = False
+        self._refresh_before = set()
+        self._last_paths = set()
         # 列宽：启动时从配置读回，拖动后防抖写回（见 _on_width_notify）。
         # _width_quiet 用来屏蔽「程序自己在设宽度」触发的保存。
         self._widths = {}
@@ -439,10 +472,15 @@ class App(object):
         toolbar.pack_start(self.clear_filter_btn, False, False, 0)
 
         self.refresh_btn = Gtk.Button()
-        self.refresh_btn.set_image(Gtk.Image.new_from_icon_name(
-            'view-refresh-symbolic', Gtk.IconSize.BUTTON))
-        self.refresh_btn.set_tooltip_text('刷新列表')
-        self.refresh_btn.connect('clicked', lambda *a: self.reload())
+        self.refresh_icon = Gtk.Image.new_from_icon_name(
+            'view-refresh-symbolic', Gtk.IconSize.BUTTON)
+        self.refresh_btn.set_image(self.refresh_icon)
+        # 点下去把箭头换成转圈：reload 太快，不换个图标根本看不出按到了
+        self.refresh_spinner = Gtk.Spinner()
+        self.refresh_spinner.set_size_request(16, 16)
+        self.refresh_spinner.set_no_show_all(True)
+        self.refresh_btn.set_tooltip_text('刷新列表（F5）')
+        self.refresh_btn.connect('clicked', self.on_refresh)
         toolbar.pack_start(self.refresh_btn, False, False, 0)
 
         self.settings_btn = Gtk.Button()
@@ -1131,6 +1169,9 @@ class App(object):
         # 托盘菜单的「最近 5 个」用完整列表：搜索和筛选都只是「看」的姿势，
         # 不该把「合上窗口也能随手复制最近文档」这条路径改窄。
         self._all_paths = list(all_paths)
+        # 记下这一版完整清单（不受搜索/筛选影响）：刷新按钮靠它算「这次多了
+        # 几个、少了几个」，否则开着筛选按刷新只会看到「没有新文档」。
+        self._last_paths = set(all_paths)
 
         def keep(p):
             # 多个词是「并且」：每个词都要在名字或目录里出现
@@ -1646,6 +1687,12 @@ class App(object):
             self.entry.grab_focus()
             self.entry.select_region(0, -1)      # 连按两次可以直接改写
             return True
+        # F5 / Ctrl+R 刷新，走和右上角按钮同一条路（同一份反馈）。
+        # 「刚在 WPS 里存完，切回来按一下」是最常见的用法，手不用离开键盘。
+        if key == Gdk.KEY_F5 or (key in (Gdk.KEY_r, Gdk.KEY_R)
+                                 and (event.state & Gdk.ModifierType.CONTROL_MASK)):
+            self.on_refresh()
+            return True
         if key == Gdk.KEY_Escape:
             # 正在搜索时 Esc 先清空搜索框（搜索框里的通行做法），再按一次才收窗口。
             # 否则「搜错了想退出来」会连着把窗口也关掉。
@@ -1696,6 +1743,81 @@ class App(object):
 
     def set_status(self, text):
         self.status.set_text(text)
+
+    # ------------------------------------------------ 刷新
+    #
+    # 这个按钮原来直接 reload()，点下去什么反馈都没有：reload 是本机的几十毫秒
+    # 活，列表没变时重画的结果和点之前一模一样，状态栏那句「共 N 个文档」也一字
+    # 不差。用户能做的就是再点两下试试 —— 那就是「点了没反应」。
+    #
+    # 所以拆成三步：先把图标换成转圈、状态栏写「正在刷新…」；读完后报出这一遍
+    # 的结果（新增 / 已不在 / 没有新文档）；几秒后把状态栏还给常规文案。
+
+    def on_refresh(self, *_args):
+        """刷新按钮 / F5 的入口。"""
+        if self._refreshing:
+            return
+        self._refreshing = True
+        self._refresh_before = set(self._last_paths)
+        self.refresh_btn.set_sensitive(False)
+        self._refresh_busy(True)
+        self.set_status('正在刷新…')
+        # reload() 是同步的：在同一个信号处理里改字，GTK 要等回到主循环才画，
+        # 那时早就改成结果了 ——「正在刷新」永远看不到。让出一轮再干活。
+        GLib.timeout_add(60, self._refresh_run)
+
+    def _refresh_run(self):
+        note = normal = None
+        try:
+            self.reload()
+            after = set(self._last_paths)
+            normal = self.status.get_text()
+            if after:
+                note = refresh_note(
+                    refresh_diff(len(after - self._refresh_before),
+                                 len(self._refresh_before - after)), normal)
+            else:
+                # 空列表时常规文案是「没读到最近文档 —— 原因见中间的提示」，
+                # 再拼一句「没有新文档」只会更长更绕，直接说仍然没读到。
+                note = '已刷新：仍然没读到文档'
+            self.set_status(note)
+        except Exception as ex:
+            core.log('刷新失败: %r' % (ex,))
+            self.set_status('刷新失败：%s' % ex)
+        # 转圈至少转到肉眼看得见：本机这活常常 20ms 就完了，一闪而过等于没动
+        GLib.timeout_add(300, self._refresh_done, note, normal)
+        return False
+
+    def _refresh_done(self, note, normal):
+        try:
+            self._refresh_busy(False)
+            self.refresh_btn.set_sensitive(True)
+        except Exception:
+            pass                       # 刷新途中窗口被关掉：没什么可恢复的
+        self._refreshing = False
+        if note and normal:
+            # 结果在状态栏上留一会儿再还原。这期间用户可能点了别的（选中、
+            # 复制），状态栏会换成他要看的信息 —— 那就别去覆盖。
+            GLib.timeout_add(2400, self._restore_status, note, normal)
+        return False
+
+    def _refresh_busy(self, busy):
+        """图标在「刷新箭头」和转圈之间切换 —— 这是「按到了」最直接的证据。"""
+        if busy:
+            self.refresh_btn.set_image(self.refresh_spinner)
+            self.refresh_spinner.show()
+            self.refresh_spinner.start()
+            self.refresh_btn.set_tooltip_text('正在刷新…')
+        else:
+            self.refresh_spinner.stop()
+            self.refresh_btn.set_image(self.refresh_icon)
+            self.refresh_icon.show()
+            self.refresh_btn.set_tooltip_text('刷新列表（F5）')
+
+    def _restore_status(self, note, normal):
+        if self.status.get_text() == note:
+            self.set_status(normal)
+        return False
 
     # ------------------------------------------------ 窗口唤醒
     def poll_wake(self):
