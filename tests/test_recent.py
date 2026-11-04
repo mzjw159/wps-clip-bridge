@@ -286,6 +286,99 @@ class CloudScanTest(unittest.TestCase):
         self.assertEqual(len(recent.scan_cloud_dirs(max_files=2)), 2)
 
 
+class CloudDirLayerTest(unittest.TestCase):
+    """云同步目录是**常规**数据层，不是「主数据源全空」才用的兜底。
+
+    用户报的现象：把文件「另存为」到团队文档、编辑了一上午，本应用的最近列表
+    里压根没有它，快捷键（复制第一行）也就复制不到。根因是 WPS 对这类文件一条
+    ``RecentFiles`` 都不写 —— 它自己的最近列表是从云端拉的，本地没有痕迹。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='wpscdir_')
+        self.conf = os.path.join(self.tmp, 'Office.conf')
+        self.cloud = os.path.join(self.tmp, 'WPS Cloud Files')
+        os.makedirs(self.cloud)
+        self._orig = (recent.CONF, recent.XBEL_CANDIDATES, recent.CLOUD_DIRS)
+        recent.CONF = self.conf
+        recent.XBEL_CANDIDATES = ()
+        recent.CLOUD_DIRS = (self.cloud,)
+
+    def tearDown(self):
+        (recent.CONF, recent.XBEL_CANDIDATES,
+         recent.CLOUD_DIRS) = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make(self, path, mtime):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write('x')
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_scan_skips_stale_files(self):
+        now = time.time()
+        new = self._make(os.path.join(self.cloud, 'a', 'new.docx'), now - 60)
+        self._make(os.path.join(self.cloud, 'a', 'old.docx'), now - 86400 * 90)
+        self.assertEqual([p for _mt, p in recent.scan_cloud_docs()], [new])
+
+    def test_scan_skips_hidden_and_non_documents(self):
+        now = time.time()
+        keep = self._make(os.path.join(self.cloud, 'keep.docx'), now - 60)
+        self._make(os.path.join(self.cloud, '.cache', 'x.docx'), now - 10)
+        self._make(os.path.join(self.cloud, 'note.log'), now - 10)
+        self.assertEqual([p for _mt, p in recent.scan_cloud_docs()], [keep])
+
+    def test_scan_reaches_deep_team_folders(self):
+        # 真实路径有五六层：团队文档/部门/分类/子类/文件。层数一卡就漏。
+        now = time.time()
+        deep = self._make(
+            os.path.join(self.cloud, 'u', 'a', 'b', 'c', 'd', 'x.docx'), now - 60)
+        self.assertEqual([p for _mt, p in recent.scan_cloud_docs()], [deep])
+
+    def test_is_cloud_path(self):
+        inner = os.path.join(self.cloud, 'x', 'a.docx')
+        self.assertTrue(recent.is_cloud_path(inner))
+        self.assertFalse(recent.is_cloud_path(os.path.join(self.tmp, 'a.docx')))
+        self.assertEqual(recent.cloud_roots(), [self.cloud])
+
+    def test_unrecorded_cloud_file_ranks_with_opened(self):
+        # A 十分钟前打开过（有记录），B 一分钟前刚编辑（云目录、没记录）。
+        # 同档 → 按时间 B 在前。旧实现把 B 压进低档，排到 A 后面。
+        now = time.time()
+        a = self._make(os.path.join(self.tmp, 'a.docx'), now - 86400)
+        b = self._make(os.path.join(self.cloud, 'b.docx'), now - 60)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % a)
+            f.write('wps\\RecentFiles\\Sequence\\%s=%d\n'
+                    % (a.lstrip('/'), int(now - 600)))
+        self.assertEqual(recent.parse_recent(), [b, a])
+
+    def test_cloud_scan_does_not_lie_about_opened(self):
+        now = time.time()
+        other = self._make(os.path.join(self.tmp, 'other.docx'), now - 86400)
+        target = self._make(os.path.join(self.cloud, 'b.docx'), now - 60)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % other)
+        rows, stats = recent.collect_meta()
+        self.assertEqual([p for p, _ts in rows], [target, other])
+        # 补扫进来的文件没有打开时间，别让 --doctor 把档位当记录数报出去
+        self.assertEqual(stats['opened'], 0)
+        self.assertEqual(stats['cloud_dir'], 1)
+
+    def test_untracked_file_outside_cloud_stays_low(self):
+        # 云目录外的无记录文件仍走低档：mtime 新也不能压过刚打开过的
+        now = time.time()
+        a = self._make(os.path.join(self.tmp, 'a.docx'), now - 86400)
+        b = self._make(os.path.join(self.tmp, 'b.docx'), now - 60)
+        with open(self.conf, 'w', encoding='utf-8') as f:
+            f.write('wps\\RecentFiles\\files\\1\\path=%s\n' % a)
+            f.write('wps\\RecentFiles\\files\\2\\path=%s\n' % b)
+            f.write('wps\\RecentFiles\\Sequence\\%s=%d\n'
+                    % (a.lstrip('/'), int(now - 3600)))
+        self.assertEqual(recent.parse_recent(), [a, b])
+
+
 class FallbackTest(unittest.TestCase):
     """主数据源坏了要能自动换源，而不是显示一个空列表。"""
 

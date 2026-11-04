@@ -57,6 +57,12 @@ CLOUD_DIRS = (
     '~/WPS Cloud Files',
 )
 
+# 云同步目录的常规补扫（不是只在主数据源全空时才用）。
+# 云目录里可能躺着几年的老底稿，全捞进来会把「最近文档」灌满，所以只取近
+# 这些天动过的，并按 mtime 封顶条数。
+CLOUD_RECENT_DAYS = 30
+CLOUD_SCAN_MAX = 200
+
 # 能当「文档」处理的扩展名（通用扫描只认这些，避免把日志、配置当文档）。
 # 故意不含 .txt：WPS 不会打开纯文本，而在配置里出现 .txt 的多半是日志路径。
 DOC_EXTS = (
@@ -414,6 +420,63 @@ def _rank(rows, limit):
     return out
 
 
+def cloud_roots():
+    """本机存在的 WPS 云同步目录（去重、保持顺序）。"""
+    out = []
+    for base in CLOUD_DIRS:
+        root = os.path.expanduser(base)
+        if os.path.isdir(root) and root not in out:
+            out.append(root)
+    return out
+
+
+def is_cloud_path(path):
+    """路径是否在 WPS 云同步目录里。"""
+    for root in cloud_roots():
+        if path.startswith(root + os.sep):
+            return True
+    return False
+
+
+def scan_cloud_docs(max_age_days=CLOUD_RECENT_DAYS, max_files=CLOUD_SCAN_MAX,
+                    max_depth=8, max_entries=20000):
+    """扫云同步目录里近 N 天动过的文档，返回 ``[(mtime, 路径)]`` 降序。
+
+    为什么要有这一层：WPS **不一定**把云端文档写进 ``RecentFiles``。用户把文件
+    「另存为」到团队文档、或直接在云文档里编辑时，配置里常常一条记录都没有 ——
+    WPS 自己的最近列表是从云端拉的，本地没有痕迹。这时只有文件本身的 mtime 能
+    说明它刚被编辑过。云目录由 WPS 独占管理，这里的 mtime 比别处可信得多。
+
+    和 :func:`scan_cloud_dirs` 的区别：那个是「主数据源全空」时的兜底，返回纯
+    路径列表、不限时间；这个是常规层，只取近期动过的，免得把几年积累的云文档
+    一次性灌进列表。
+    """
+    cutoff = time.time() - max_age_days * 86400
+    rows = []
+    seen = 0
+    for root in cloud_roots():
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+            if dirpath[len(root):].count(os.sep) >= max_depth:
+                dirnames[:] = []
+            for name in filenames:
+                seen += 1
+                if seen > max_entries:
+                    rows.sort(reverse=True)
+                    return rows[:max_files]
+                if not _is_doc(name):
+                    continue
+                p = os.path.join(dirpath, name)
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    continue
+                if mt >= cutoff:
+                    rows.append((mt, p))
+    rows.sort(reverse=True)
+    return rows[:max_files]
+
+
 # ---------------------------------------------------------------- 汇总
 
 def collect_meta(only_exist=True, allow_fallback=True):
@@ -453,6 +516,14 @@ def collect_meta(only_exist=True, allow_fallback=True):
             paths.setdefault(p, '通用扫描')
         stats['scanned'] = len(scanned)
 
+    # 云同步目录补扫：WPS 对「另存为到团队文档」和云端直接编辑的文件可能一条
+    # 记录都不写，只靠配置文件就会漏掉用户刚在改的那份。这一层不替代主数据源，
+    # 只是把云目录里近期动过的文件补进来（主源失败时仍走下面的兜底）。
+    cloud_recent = {p for _mt, p in scan_cloud_docs()}
+    for p in cloud_recent:
+        paths.setdefault(p, '云同步目录')
+    stats['cloud_dir'] = len(cloud_recent)
+
     if not paths and allow_fallback:
         for label, getter in (('GTK 最近使用', read_xbel),
                               ('云文档目录', scan_cloud_dirs)):
@@ -464,12 +535,14 @@ def collect_meta(only_exist=True, allow_fallback=True):
                     paths.setdefault(p, label)
                 break
 
-    # 排序键：(有没有打开时间, 时间, mtime, 路径)。
+    # 排序键：(档位, 时间, mtime, 路径)。
     #
-    # 第一个分量是档位：有 WPS 打开记录的整批排在前面。不这么分的话，
-    # 「一分钟前刚被别的软件改过、但 WPS 没打开过」的文件会压过「半分钟前
-    # 刚打开过」的文件 —— 用户明明看到 WPS 里它在第一，这边却是第二。
-    # 全都没有记录时（兜底数据源）档位相同，退化成按 mtime 排，行为不变。
+    # 档位把「WPS 自己管理的文件」放在前面：有打开记录的，和躺在本机云同步目录
+    # 里的（后者由 WPS 独占写入，mtime 就是可信的「最近动过」证据）。不这么分
+    # 的话，「一分钟前刚被别的软件改过、WPS 没打开过」的文件会压过「半分钟前
+    # 刚打开过」的 —— 用户明明看到 WPS 里它在第一，这边却是第二。
+    # 云目录必须算进同一档：用户「另存为」到团队文档后接着编辑，WPS 往往不写
+    # RecentFiles，只按「有没有打开记录」分档会把刚编辑的那份压到最后。
     rows = []
     for p in paths:
         if only_exist and not os.path.isfile(p):
@@ -479,11 +552,14 @@ def collect_meta(only_exist=True, allow_fallback=True):
         except OSError:
             mt = 0
         ts = opened.get(p, 0)
-        rows.append((1 if ts else 0, ts or mt, mt, p))
+        managed = bool(ts) or p in cloud_recent
+        rows.append((1 if managed else 0, ts or mt, mt, p))
     rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]), reverse=True)
     stats['total'] = len(paths)
     stats['missing'] = len(paths) - len(rows)
-    stats['opened'] = sum(1 for row in rows if row[0])
+    # 有真实打开记录的条数。不能拿档位求和 —— 云同步目录里没有记录的文件
+    # 也进同一档，那样 --doctor 会把它们算成「读到了打开时间」。
+    stats['opened'] = sum(1 for _tier, _when, _mt, p in rows if p in opened)
     # 云端文档里真正补到时间的条数（doctor 用它说明「云端也参与排序」）
     stats['cloud_open'] = len(cloud_paths & set(opened))
     return [(p, opened.get(p, 0)) for _tier, _when, _mt, p in rows], stats
@@ -531,6 +607,7 @@ def diagnose():
         'fallback_hits': st.get('fallback_hits', 0),
         'opened': st.get('opened', 0),
         'cloud_open': st.get('cloud_open', 0),
+        'cloud_dir': st.get('cloud_dir', 0),
         'hint': '',
     }
 

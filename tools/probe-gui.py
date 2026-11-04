@@ -269,7 +269,33 @@ check(tops[:1] == [cloud], '托盘「最近 5 个」里有它', tops[:3])
 check(recent.parse_recent(limit=1) == [cloud], '快捷键复制取到的也是它')
 check(recent.source_of(cloud) == '云端', '来源仍标成「云端」')
 
-print('\n[9] 截图')
+print('\n[9] 「另存为到团队文档」的那份（WPS 一条记录都不写）')
+# 用户报的 bug：把文件「另存为」到 WPS 团队文档后编辑了一上午，本应用的最近
+# 列表里根本没有它，快捷键（复制第一行）也就复制不到。不是云端都排不好 ——
+# 这份连 openfilelist 都没进。WPS 自己的最近列表是从云端拉的，本地不留痕；
+# 唯一能证明它在改的，就是云同步目录里那个文件的 mtime。
+team_dir = os.path.join(H, '文档', 'WPS Cloud Files', '491878967', '团队文档',
+                        '住建局办公室_1', '04-总结汇报', '02-市政科&城更科')
+os.makedirs(team_dir, exist_ok=True)
+team = os.path.join(team_dir, '2026年11月4日 - 刚编辑的汇报.docx')
+with open(team, 'w') as f:
+    f.write('x')
+os.utime(team, (now - 5, now - 5))          # 比上面那份缓存还新 10 秒
+app2.reload()
+pump(0.8)
+names = rows(app2)
+check(names and names[0] == os.path.basename(team),
+      '完全没有 WPS 记录的云文档也能进列表并排第一', names[:3])
+check(app2.store[app2.store.get_iter_first()][gui.C_NAME] == '今天',
+      '它进了「今天」组',
+      app2.store[app2.store.get_iter_first()][gui.C_NAME])
+tops = [p for _label, p in app2._tray_recent()]
+print('  托盘最近: %s' % [os.path.basename(p) for p in tops][:3])
+check(tops[:1] == [team], '托盘「最近 5 个」里有它', tops[:3])
+check(recent.parse_recent(limit=1) == [team], '快捷键复制取到的也是它')
+check(recent.source_of(team) == '云端', '来源标成「云端」')
+
+print('\n[10] 截图')
 app2.win.show_all()
 app2.win.present()
 app2.win.resize(1180, 760)

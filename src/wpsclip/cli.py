@@ -426,6 +426,10 @@ def cmd_doctor(_args):
     if info['cloud_open']:
         print('    其中云端文档 %d 条（按 Sequence / 本地缓存时间补的记录）'
               % info['cloud_open'])
+    if info['cloud_dir']:
+        print('    云同步目录补扫 %d 条（近 %d 天动过的；WPS 对「另存为到云文档」'
+              '常常不写 RecentFiles）'
+              % (info['cloud_dir'], rn.CLOUD_RECENT_DAYS))
     if info['existing'] and not info['opened']:
         mark('warn', '一条打开时间都没读到 —— 列表会按文件修改时间排，'
                      '「打开老文档但不修改」不会挪到最前面。'

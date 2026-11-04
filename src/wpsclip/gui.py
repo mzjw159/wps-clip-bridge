@@ -1140,6 +1140,15 @@ class App(object):
             """这一行显示的「最近打开」：WPS 有记录就用它，没有才退回 mtime。"""
             return self._opened.get(p) or mt or 0
 
+        def _managed(p):
+            """是否属于「WPS 自己管理」的文件（排序时排在无记录文件之前）。
+
+            两种：WPS 写过打开记录的；躺在本机云同步目录里的 —— 后者由 WPS
+            独占写入，mtime 就是可信的「最近动过」证据，用户「另存为」到团队
+            文档后接着编辑时，WPS 往往一条 RecentFiles 都不写。
+            """
+            return bool(self._opened.get(p)) or recent.source_of(p) == '云端'
+
         def entries_of(items):
             """[(路径, 字节数, 文件修改时间)]；stat 失败的大小记 None，显示成 ?。"""
             out = []
@@ -1190,12 +1199,13 @@ class App(object):
             for key in sorted(buckets):
                 label, items = buckets[key]
                 if items:
-                    # 组内也是「有打开记录的在先」（和 collect 的档位一致），
-                    # 档内再按时间倒序。不加档位的话，一个刚被别的软件改过、
-                    # 但 WPS 没打开过的文件会压过刚打开过的那份。
-                    # 档位写成「有记录=1」而不是 0：这里 reverse=True，写 0 会被
+                    # 组内也跟 collect 的档位保持一致：有打开记录的、以及云同步
+                    # 目录里的（WPS 独占写入，mtime 可信）算同一档，档内再按时间
+                    # 倒序。不加档位的话，一个刚被别的软件改过、但 WPS 没打开过
+                    # 的文件会压过刚打开过的那份。
+                    # 档位写成「在有记录=1」而不是 0：这里 reverse=True，写 0 会被
                     # 翻到后面去。
-                    items.sort(key=lambda x: (1 if self._opened.get(x[0]) else 0,
+                    items.sort(key=lambda x: (1 if _managed(x[0]) else 0,
                                               when_of(x[0], x[2]), x[2]),
                                reverse=True)
                     groups.append((label, items))
